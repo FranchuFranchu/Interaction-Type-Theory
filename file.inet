@@ -1,0 +1,84 @@
+// Nats
+def Z = λs λz (z)
+def S = λn λs λz (s n)
+
+// Church arithmetic
+def zero = λs λz (z)
+def succ = λn λs λz dup s0 s1 = s; (s0 (n s1 z))
+def mul = λn λm λs (n (m s))
+
+// Church consts
+def c1 = λf λx (f x)
+def c2 = λf λx (dup #c f0 f1 = f; (f0 (f1 x)))
+def c3 = λf λx (dup #c f0 f1 = f; dup #c f2 f3 = f0; (f1 (f2 (f3 x))))
+def c4 = λf λx (dup #c f0 f1 = f; dup #c f2 f3 = f0; dup #c f4 f5 = f1; (f2 (f3 (f4 (f5 x)))))
+def p1 = c2          // 2
+def p2 = (mul c2 p1) // 4
+def p3 = (mul c2 p2) // 8
+def p4 = (mul c2 p3) // 16
+def p5 = (mul c2 p4) // 32
+def p6 = (mul c2 p5) // 64
+def p7 = (mul c2 p6) // 128
+def p8 = (mul c2 p7) // 256
+
+// Booleans
+def true = λt λf t
+def false = λt λf f
+def not = λb ((b false) true)
+def neg = λb λt λf (b f t)
+
+// Lists
+def cons = λhead λtail λcons λnil (cons head tail)
+def nil = λcons λnil nil
+def head = λlist (list λhλt(h) λx(x))
+def tail = λlist (list λhλt(t) nil)
+
+  
+
+def map = @map λf λxs
+  dup #f f0 f1 = f;
+  (xs λhead λtail (cons (f0 head) (map f1 tail)) nil)
+
+def ids = @k λcons λnil (cons λx(x) k)
+def nums = @x (cons zero (map succ x))
+def inf = @inf λs λz (s inf)
+
+//def f0 = @x (cons true (cons true (cons false x)))
+//def f1 = @x (cons true (cons true (cons false (cons true (cons true (cons false x))))))
+
+def f0 = @x λsλz(s inf)
+def f1 = inf
+
+//λA λB λ(a: A) <a: B>
+
+def term = λa λb λc λd d
+def type = 
+  dup A0 A1 = A; 
+  dup B0 B1 = B; 
+  ∀A ∀B &A0 &B0
+  B1
+  
+def Equal = λa λb ∀P 
+  dup P0 P1 = P
+  &(P0 a) (P1 b)
+
+def Equal.refl = λa λP λx x
+def Equal.refl.t = λa ∀P 
+  dup P0 P1 = P
+  dup a0 a1 = a
+  &(P0 a0) (P1 a1)
+
+def self = λs Θx dup #c x0 x1 = x; <x0: (s x1)>
+def forall = λb &(Θx *) (b x)
+def forall2 = λb ∀x (b x)
+def dependent = λA λB &(Θx dup x0 x1 = x; <x0: A>) (B x1)
+
+def Bool.true = λp λt λf t
+def Unit.new = λp λnew new
+def Unit = (self λunit (dependent 
+  (&* *) 
+  (λP dup P0 P1 = P; &(P0 Unit.new) (P1 unit))
+  ))
+
+//∀A dup a0 a1 = A; dup a2 a3 = a0; <(Equal.refl a3): (Equal a1 a2)>
+<λp λa λb λx x: Unit>

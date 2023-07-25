@@ -191,7 +191,7 @@ fn is_coherent(inet: &mut INet, prev: Port, stacks: &mut Paths, queues: &mut Pat
   if kind == ERA {
     return is_coherent(inet, port(addr(next), 0), stacks, queues);
   }
-
+  println!("{:?} {:?}", slot, kind);
   // If entering a main port...
   if slot == 0 {
     // If stack isn't empty, pop from stack and go to that port
@@ -209,8 +209,6 @@ fn is_coherent(inet: &mut INet, prev: Port, stacks: &mut Paths, queues: &mut Pat
       queues.get_mut(&kind).unwrap().pop();
       return e1 && e2;
     }
-
-  // If entering an aux port, push to stack and go to main port
   } else {
     stacks.entry(kind).or_default().push(slot as u8);
     let e0 = is_coherent(inet, port(addr(next), 0), stacks, queues);

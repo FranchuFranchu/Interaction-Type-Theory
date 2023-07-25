@@ -20,8 +20,6 @@ use std::io::prelude::*;
 use std::fs::File;
 
 fn main() {
-  return test::test();
-
   let matches = App::new("My App")
     .version("1.0")
     .author("Victor Taelin <victor.taelin@gmail.com>")
@@ -31,6 +29,7 @@ fn main() {
       .required(true)
       .index(1))
     .get_matches();
+    
 
   // Reads source file to a string
   let file_name = matches.value_of("file").unwrap();

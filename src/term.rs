@@ -8,7 +8,7 @@ use std;
 #[derive(Clone, Debug)]
 pub enum Term {
   // Abstractions
-  Lam {nam: Vec<u8>, bod: Box<Term>},                
+  Lam {nam: Vec<u8>, bod: Box<Term>},
 
   // Applications
   App {fun: Box<Term>, arg: Box<Term>},
@@ -33,6 +33,9 @@ pub enum Term {
 
   // Variables
   Var {nam: Vec<u8>}, 
+  
+  // Type-lambda
+  Tla {nam: Vec<u8>, bod: Box<Term> },
 
   // Erasure
   Set
@@ -69,6 +72,22 @@ pub fn inject(inet: &mut INet, term: &Term, host: Port) {
       // - 2: points to the lambda body.
       &Lam { ref nam, ref bod } => {
         let fun = new_node(net, CON);
+        scope.insert(nam.to_vec(), port(fun, 1));
+        if nam == b"*" {
+          let era = new_node(net, ERA);
+          link(net, port(era, 1), port(era, 2));
+          link(net, port(fun, 1), port(era, 0));
+        }
+        let bod = encode_term(net, bod, port(fun, 2), scope, vars);
+        link(net, port(fun, 2), bod);
+        port(fun, 0)
+      },
+      // A type-lambda becomes an ann node. Ports:
+      // - 0: points to where the lambda occurs.
+      // - 1: points to the lambda variable.
+      // - 2: points to the lambda body.
+      &Tla { ref nam, ref bod } => {
+        let fun = new_node(net, ANN);
         scope.insert(nam.to_vec(), port(fun, 1));
         if nam == b"*" {
           let era = new_node(net, ERA);
@@ -263,6 +282,7 @@ pub fn readback(net : &INet, host : Port) -> Term {
   ) -> Term {
 
     if seen.contains(&next) {
+      println!("{:?}", next);
       return Var{nam: b"...".to_vec()};
     }
 
@@ -298,9 +318,14 @@ pub fn readback(net : &INet, host : Port) -> Term {
       },
       // If we're visiting an ANN node...
       ANN => match slot(next) {
-        // If we're visiting a port 0, then it is an annotation...
+        // If we're visiting a port 0, then it is an ann-lambda
         0 => {
-          panic!("Reached port 0 of an ANN node on readback. That shouldn't be possible.");
+          let nam = name_of(net, port(addr(next), 1), var_name);
+          let prt = enter(net, port(addr(next), 2));
+          let bod = reader(net, prt, var_name, dups_vec, dups_set, seen);
+          let ann = enter(net, port(addr(next), 1));
+          let lam = Tla { nam: nam, bod: Box::new(bod) };
+          lam
         },
         // If we're visiting a port 1, then it is where the annotation occurs.
         _ => {
@@ -488,6 +513,11 @@ pub fn copy(space : &Vec<u8>, idx : u32, term : &Term) -> Term {
       let bod = Box::new(copy(space, idx, bod));
       Lam{nam, bod}
     },
+    Tla{nam, bod} => {
+      let nam = namespace(space, idx, nam);
+      let bod = Box::new(copy(space, idx, bod));
+      Tla{nam, bod}
+    },
     App{fun, arg} => {
       let fun = Box::new(copy(space, idx, fun));
       let arg = Box::new(copy(space, idx, arg));
@@ -580,6 +610,26 @@ pub fn parse_term<'a>(code: &'a Str, ctx: &mut Context<'a>, idx: &mut u32) -> (&
       let (code, bod) = parse_term(code, ctx, idx);
       narrow(ctx);
       (code, bod)
+    }
+    // Untyped Abstraction: `λvar body`
+    b'\xce' if code[1] == b'\xbb' => {
+      let (code, nam) = parse_name(&code[2..]);
+      extend(nam, None, ctx);
+      let (code, bod) = parse_term(code, ctx, idx);
+      narrow(ctx);
+      let nam = nam.to_vec();
+      let bod = Box::new(bod);
+      (code, Lam { nam, bod })
+    }
+    // Ann-lambda: `Θvar body`
+    b'\xce' if code[1] == b'\x98' => {
+      let (code, nam) = parse_name(&code[2..]);
+      extend(nam, None, ctx);
+      let (code, bod) = parse_term(code, ctx, idx);
+      narrow(ctx);
+      let nam = nam.to_vec();
+      let bod = Box::new(bod);
+      (code, Tla { nam, bod })
     }
     // Untyped Abstraction: `λvar body`
     b'\xce' if code[1] == b'\xbb' => {
@@ -706,6 +756,12 @@ pub fn to_string(term : &Term) -> Vec<Chr> {
     match term {
       &Lam{ref nam, ref bod} => {
         code.extend_from_slice("λ".as_bytes());
+        code.append(&mut nam.clone());
+        code.extend_from_slice(b" ");
+        stringify_term(code, &bod);
+      },
+      &Tla{ref nam, ref bod} => {
+        code.extend_from_slice("Θ".as_bytes());
         code.append(&mut nam.clone());
         code.extend_from_slice(b" ");
         stringify_term(code, &bod);
