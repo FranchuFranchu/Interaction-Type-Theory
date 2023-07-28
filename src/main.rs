@@ -1,27 +1,28 @@
 #![allow(dead_code)]
+#![allow(non_snake_case)]
+#![allow(unreachable_code)]
 #![allow(unused_imports)]
 #![allow(unused_mut)]
 #![allow(unused_parens)]
 #![allow(unused_variables)]
-#![allow(unreachable_code)]
 
 extern crate clap;
 use clap::{Arg, App};
 
-mod term;
-mod inet;
-mod check;
+mod itt;
+mod syntax;
 mod test;
 
-use inet::*;
-use term::*;
-use check::*;
+use itt::*;
+use syntax::*;
 
 use std::io;
 use std::io::prelude::*;
 use std::fs::File;
 
 fn main() {
+  return test::test();
+
   let matches = App::new("My App")
     .version("1.0")
     .author("Victor Taelin <victor.taelin@gmail.com>")
@@ -47,16 +48,13 @@ fn main() {
   inject(&mut inet, &term, ROOT);
 
   // Normalizes
-  normal(&mut inet, ROOT);
+  eager(&mut inet);
 
-  println!("{}", show(&inet, ROOT));
+  println!("{}", show(&inet));
   println!("\x1b[90m{:?} rewrites\x1b[0m", inet.rules);
 
-  println!("Check? \n{}", if check(&mut inet, ROOT) { "✓" } else { "✗" });
-  println!("");
-
-  let term = term::from_string(code.as_bytes());
-  let (norm, rules) = term::normalize(&term);
+  let term = syntax::from_string(code.as_bytes());
+  let (norm, rules) = syntax::normalize(&term);
 
   println!("{}\n", norm);
   println!("{:?} rewrites", rules);

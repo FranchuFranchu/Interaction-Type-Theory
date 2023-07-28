@@ -3,12 +3,12 @@
 extern crate rand;
 
 use std::collections::*;
-use inet::*;
+use itt::*;
 use std;
 use self::rand::Rng;
 
-// Terms of the Interaction Calculus.
-// <Term> ::= <Lam> | <App> | <Sup> | <Dup> | <Fix> | <Ann> | <Arr> | <Pol> | <Var> | <Era>
+// Translations from CoC to ITT.
+// <Term> ::= <Lam> | <App> | <Sup> | <Dup> | <Fix> | <Ann> | <Arr> | <Pol> | <Var> | <Any> | <Era>
 // <Lam>  ::= "λ" <Name> <Term>
 // <App>  ::= "(" <Term> <Term> ")"
 // <Ann>  ::= "<" <Term> ":" <Term> ")"
@@ -17,8 +17,9 @@ use self::rand::Rng;
 // <Arr>  ::= <Term> "->" <Term>
 // <All>  ::= "∀(" <Name> ":" <Term> ")" "->" <Term>
 // <Pol>  ::= "∀" <Name> <Term>
-// <Fix>  ::= "@" <Name> <Term>
+// <Fix>  ::= "%" <Name> <Term>
 // <Var>  ::= <Name>
+// <Any>  ::= "@"
 // <Era>  ::= "*"
 // <Name> ::= <alphanumeric_Name>
 // <Tag>  ::= <positive_integer>
@@ -40,6 +41,9 @@ pub enum Term {
   // Recursion
   Fix {nam: Vec<u8>, bod: Box<Term>},
 
+  // Light-annotations
+  Lan {val: Box<Term>, typ: Box<Term>},
+  
   // Annotations
   Ann {val: Box<Term>, typ: Box<Term>},
 
@@ -58,8 +62,11 @@ pub enum Term {
   // Type-lambda
   Tla {nam: Vec<u8>, bod: Box<Term> },
 
+  // Any
+  Any,
+
   // Erasure
-  Era
+  Era,
 }
 
 use self::Term::{*};
@@ -126,11 +133,31 @@ pub fn inject(inet: &mut INet, term: &Term, host: Port) {
       // - 1: points to where the annotation occurs.
       // - 2: points to the value being annotated.
       &Ann{ref val, ref typ} => {
+        //let ann = new_node(net, ANN);
+        //let val = encode_term(net, val, port(ann, 2), scope, vars);
+        //link(net, port(ann, 2), val);
+        //let typ = encode_term(net, typ, port(ann, 0), scope, vars);
+        //link(net, port(ann, 0), typ);
+        //port(ann, 1)
         let ann = new_node(net, ANN);
-        let val = encode_term(net, val, port(ann, 2), scope, vars);
-        link(net, port(ann, 2), val);
+        let orb = new_node(net, ORB);
+        let era = new_node(net, ERA);
+        let val = encode_term(net, val, port(orb, 0), scope, vars);
+        link(net, port(orb, 0), val);
+        link(net, port(orb, 1), port(ann, 2));
+        link(net, port(orb, 2), port(era, 0));
+        link(net, port(era, 1), port(era, 2));
         let typ = encode_term(net, typ, port(ann, 0), scope, vars);
         link(net, port(ann, 0), typ);
+        port(ann, 1)
+      },
+      // Light-annotation, without ORB
+      &Lan {ref val, ref typ} => {
+        let ann = new_node(net, ANN);
+        let typ = encode_term(net, typ, port(ann, 0), scope, vars);
+        let val = encode_term(net, val, port(ann, 2), scope, vars);
+        link(net, port(ann, 0), typ);
+        link(net, port(ann, 2), val);
         port(ann, 1)
       },
       // A pair becomes a dup node. Ports:
@@ -194,6 +221,30 @@ pub fn inject(inet: &mut INet, term: &Term, host: Port) {
         let out = encode_term(net, out, port(arr, 2), scope, vars);
         link(net, port(arr, 2), out);
         port(arr, 0)
+
+        //let arr = new_node(net, CON);
+        //let c_i = new_node(net, CHK);
+        //let c_o = new_node(net, CHK);
+        //let inp = encode_term(net, inp, port(c_i, 1), scope, vars);
+        //let out = encode_term(net, out, port(c_o, 1), scope, vars);
+        //link(net, port(arr, 1), port(c_i, 0));
+        //link(net, port(arr, 2), port(c_o, 0));
+        //link(net, port(c_i, 2), port(c_o, 2));
+        //link(net, port(c_i, 1), inp);
+        //link(net, port(c_o, 1), out);
+        //port(arr, 0)
+
+        //let arr = new_node(net, CON);
+        //let c_i = new_node(net, CHK);
+        //let c_o = new_node(net, CHK);
+        //let inp = encode_term(net, inp, port(c_i, 1), scope, vars);
+        //let out = encode_term(net, out, port(c_o, 1), scope, vars);
+        //link(net, port(arr, 1), port(c_i, 0));
+        //link(net, port(arr, 2), port(c_o, 0));
+        //link(net, port(c_i, 2), port(c_o, 2));
+        //link(net, port(c_i, 1), inp);
+        //link(net, port(c_o, 1), out);
+        //port(arr, 0)
       },
       // Forall nodes become the following net:
       // - all = CON @ a {out(X)}
@@ -202,62 +253,46 @@ pub fn inject(inet: &mut INet, term: &Term, host: Port) {
       // - dup = DUP d {X} c
       // Using the same conventions as Pol.
       &All { ref nam, ref inp, ref out } => {
-        // new rev
-        // random u32 from 0 til 65536:
-        let rnd = rand::random::<u32>() % 256;
         let all = new_node(net, CON);
         let an0 = new_node(net, ANN);
         let an1 = new_node(net, ANN);
-        let dup = new_node(net, DUP + 100);
+        let dup = new_node(net, DUP);
         link(net, port(an0, 0), port(all, 1));
         link(net, port(an0, 1), port(an1, 1));
-        link(net, port(an0, 2), port(dup, 0));
-        scope.insert(nam.to_vec(), port(dup, 2));
+        link(net, port(an0, 2), port(dup, 2));
+        scope.insert(nam.to_vec(), port(dup, 1));
         let inp = encode_term(net, inp, port(an1, 0), scope, vars);
         link(net, port(an1, 0), inp);
-        link(net, port(an1, 2), port(dup, 1));
+        link(net, port(an1, 2), port(dup, 0));
         let out = encode_term(net, out, port(all, 2), scope, vars);
         link(net, port(all, 2), out);
         port(all, 0)
 
-        // new
         //let all = new_node(net, CON);
         //let an0 = new_node(net, ANN);
         //let an1 = new_node(net, ANN);
-        //let dup = new_node(net, DUP);
-        //scope.insert(nam.to_vec(), port(dup, 1));
-        //let inp = encode_term(net, inp, port(an1, 0), scope, vars);
-        //let out = encode_term(net, out, port(all, 2), scope, vars);
-        //link(net, port(all, 1), port(an0, 0));
-        //link(net, port(an0, 1), port(dup, 0));
-        //link(net, port(an0, 2), port(an1, 2));
-        //link(net, port(an1, 0), inp);
-        //link(net, port(an1, 1), port(dup, 2));
-        //link(net, port(all, 2), out);
-        //port(all, 0)
-
-        // old
-        //let all = new_node(net, CON);
-        //let an0 = new_node(net, ANN);
-        //let an1 = new_node(net, ANN);
-        //let dup = new_node(net, DUP);
-        //link(net, port(an0, 0), port(all, 1));
+        //let c_i = new_node(net, CHK);
+        //let c_o = new_node(net, CHK);
+        //let dup = new_node(net, DUP + 1);
+        //link(net, port(c_i, 2), port(c_o, 2));
+        //link(net, port(c_i, 0), port(all, 1));
+        //link(net, port(c_o, 0), port(all, 2));
+        //link(net, port(an0, 0), port(c_i, 1));
         //link(net, port(an0, 1), port(an1, 1));
         //link(net, port(an0, 2), port(dup, 2));
         //scope.insert(nam.to_vec(), port(dup, 1));
         //let inp = encode_term(net, inp, port(an1, 0), scope, vars);
         //link(net, port(an1, 0), inp);
         //link(net, port(an1, 2), port(dup, 0));
-        //let out = encode_term(net, out, port(all, 2), scope, vars);
-        //link(net, port(all, 2), out);
+        //let out = encode_term(net, out, port(c_o, 1), scope, vars);
+        //link(net, port(c_o, 1), out);
         //port(all, 0)
       },
       // Polymorphism nodes become the following net:
       // - pol = CON @ a {out(x)}
-      // - ann = ANN a b c
-      // - dup = DUP b {X} c 
+      // - ann = ANN a {x} d
+      // - era = ERA d e e
       &Pol { ref nam, ref out } => {
-
         let pol = new_node(net, CON);
         let ann = new_node(net, ANN);
         link(net, port(ann, 0), port(pol, 1));
@@ -269,6 +304,22 @@ pub fn inject(inet: &mut INet, term: &Term, host: Port) {
         link(net, port(pol, 2), out);
         port(pol, 0)
 
+        //let pol = new_node(net, CON);
+        //let c_i = new_node(net, CHK);
+        //let c_o = new_node(net, CHK);
+        //let ann = new_node(net, ANN);
+        //link(net, port(c_i, 2), port(c_o, 2));
+        //link(net, port(c_i, 0), port(pol, 1));
+        //link(net, port(c_o, 0), port(pol, 2));
+        //link(net, port(ann, 0), port(c_i, 1));
+        //let era = new_node(net, ERA);
+        //link(net, port(era, 1), port(era, 2));
+        //link(net, port(ann, 2), port(era, 0));
+        //scope.insert(nam.to_vec(), port(ann, 1));
+        //let out = encode_term(net, out, port(c_o, 1), scope, vars);
+        //link(net, port(c_o, 1), out);
+        //port(pol, 0)
+        
         //let pol = new_node(net, CON);
         //let ann = new_node(net, ANN);
         //let dup = new_node(net, DUP);
@@ -295,6 +346,11 @@ pub fn inject(inet: &mut INet, term: &Term, host: Port) {
         //let out = encode_term(net, out, port(all, 2), scope, vars);
         //link(net, port(all, 2), out);
         //port(all, 0)
+      },
+      &Any => {
+        let set = new_node(net, ANN);
+        link(net, port(set, 1), port(set, 2));
+        port(set, 0)
       },
       &Era => {
         let set = new_node(net, ERA);
@@ -383,7 +439,7 @@ pub fn readback(net : &INet, host : Port) -> Term {
     seen.insert(next);
 
     match kind(net, addr(next)) {
-      // If we're visiting a set...
+      // If we're visiting a eraser...
       ERA => Era,
       // If we're visiting a con node...
       CON => match slot(next) {
@@ -626,6 +682,11 @@ pub fn copy(space : &Vec<u8>, idx : u32, term : &Term) -> Term {
       let typ = Box::new(copy(space, idx, typ));
       Ann{val, typ}
     },
+    Lan{val, typ} => {
+      let val = Box::new(copy(space, idx, val));
+      let typ = Box::new(copy(space, idx, typ));
+      Lan{val, typ}
+    },
     Arr{inp, out} => {
       let inp = Box::new(copy(space, idx, inp));
       let out = Box::new(copy(space, idx, out));
@@ -646,7 +707,8 @@ pub fn copy(space : &Vec<u8>, idx : u32, term : &Term) -> Term {
       let nam = namespace(space, idx, nam);
       Var{nam}
     },
-    Era => Era
+    Any => Any,
+    Era => Era,
   }
 }
 
@@ -746,6 +808,13 @@ pub fn parse_term<'a>(code: &'a Str, ctx: &mut Context<'a>, idx: &mut u32) -> (&
       let code = parse_text(code, b">").unwrap();
       (code, Ann { val: Box::new(val), typ: Box::new(typ) })
     },
+    // Light-annotation: `[typ val]`
+    b'[' => {
+      let (code, val) = parse_term(&code[1..], ctx, idx);
+      let (code, typ) = parse_term(code, ctx, idx);
+      let code = parse_text(code, b"]").unwrap();
+      (code, Lan { val: Box::new(val), typ: Box::new(typ) })
+    },
     // Pair: `{val0 val1}#tag` (note: '#tag' is optional)
     b'{' => {
       let (code, fst) = parse_term(&code[1..], ctx, idx);
@@ -778,8 +847,8 @@ pub fn parse_term<'a>(code: &'a Str, ctx: &mut Context<'a>, idx: &mut u32) -> (&
       let nxt = Box::new(nxt);
       (code, Dup { tag, fst, snd, val, nxt })
     }
-    // Fix: `@name body`
-    b'@' => {
+    // Fix: `%name body`
+    b'%' => {
       let (code, nam) = parse_name(&code[1..]);
       let (code, bod) = parse_term(code, ctx, idx);
       let nam = nam.to_vec();
@@ -795,7 +864,6 @@ pub fn parse_term<'a>(code: &'a Str, ctx: &mut Context<'a>, idx: &mut u32) -> (&
     },
     // Forall: `∀(nam:inp) -> out`
     b'\xe2' if code[1] == b'\x88' && code[2] == b'\x80' && code[3] == b'(' => {
-      println!("forall!");
       let (code, nam) = parse_name(&code[4..]);
       let code = parse_text(code, b":").unwrap();
       extend(nam, None, ctx);
@@ -816,6 +884,10 @@ pub fn parse_term<'a>(code: &'a Str, ctx: &mut Context<'a>, idx: &mut u32) -> (&
       narrow(ctx);
       let nam = nam.to_vec();
       (code, Pol { nam, out: Box::new(out) })
+    },
+    // Any: `@`
+    b'@' => {
+      (&code[1..], Any)
     },
     // Era: `*`
     b'*' => {
@@ -876,6 +948,13 @@ pub fn to_string(term : &Term) -> Vec<Chr> {
         stringify_term(code, &arg);
         code.extend_from_slice(b")");
       },
+      &Lan{ref val, ref typ} => {
+        code.extend_from_slice(b"[");
+        stringify_term(code, &typ);
+        code.extend_from_slice(b" ");
+        stringify_term(code, &val);
+        code.extend_from_slice(b"]");
+      },
       &Ann{ref val, ref typ} => {
         code.extend_from_slice(b"<");
         stringify_term(code, &val);
@@ -910,7 +989,7 @@ pub fn to_string(term : &Term) -> Vec<Chr> {
         stringify_term(code, &nxt);
       },
       &Fix{ref nam, ref bod} => {
-        code.extend_from_slice(b"@");
+        code.extend_from_slice(b"%");
         code.append(&mut nam.clone());
         code.extend_from_slice(b" ");
         stringify_term(code, &bod);
@@ -934,6 +1013,9 @@ pub fn to_string(term : &Term) -> Vec<Chr> {
         code.append(&mut nam.clone());
         code.extend_from_slice(b" ");
         stringify_term(code, &out);
+      },
+      &Any => {
+        code.extend_from_slice(b"@");
       },
       &Era => {
         code.extend_from_slice(b"*");
@@ -1010,7 +1092,7 @@ pub fn lambda_term_to_inet(term : &Term) -> INet {
     }
   }
   let mut inet : INet = new_inet();
-  let mut label : u32 = 1;
+  let mut label : u32 = DUP;
   let mut scope : Vec<(Vec<u8>, u32)> = Vec::new();
   let ptr : Port = encode(&mut inet, &mut label, &mut scope, term);
   link(&mut inet, 0, ptr);
@@ -1018,7 +1100,7 @@ pub fn lambda_term_to_inet(term : &Term) -> INet {
 }
 
 // Converts a net to a *full* lambda term.
-pub fn lambda_term_from_inet(inet : &INet) -> Term {
+pub fn lambda_term_from_inet(inet: &INet, init: Port) -> Term {
   fn go(inet : &INet, node_depth : &mut Vec<u32>, next : Port, exit : &mut Vec<Port>, depth : u32) -> Term {
     let prev_port = enter(inet, next);
     let prev_slot = slot(prev_port);
@@ -1060,5 +1142,5 @@ pub fn lambda_term_from_inet(inet : &INet) -> Term {
   let mut node_depth : Vec<u32> = Vec::with_capacity(inet.nodes.len() / 4);
   let mut exit : Vec<u32> = Vec::new();
   node_depth.resize(inet.nodes.len() / 4, 0);
-  go(inet, &mut node_depth, ROOT, &mut exit, 0)
+  go(inet, &mut node_depth, init, &mut exit, 0)
 }
