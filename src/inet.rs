@@ -226,35 +226,44 @@ fn is_symmetric(stacks: &mut Paths, queues: &mut Paths, kind: u32) -> bool {
     (None, None) => true,
   }
 }
-
 // Debugger
 pub fn show(inet: &INet, prev: Port) -> String {
-  let next = enter(inet, prev);
-  if next == ROOT {
-    "".to_string()
-  } else {
-    let slot_next = slot(next);
-    if slot_next == 0 {
-      let a = show(inet, port(addr(next), 1));
-      let b = show(inet, port(addr(next), 2));
-      let k = kind(inet, addr(next));
-      if k == ERA {
-        format!("*")
-      } else {
-        let p = if k == CON {
-          ('(', ')')
-        } else if k == ANN {
-          ('[', ']')
-        } else if k >= DUP {
-          ('{', '}')
-        } else {
-          ('?', '?')
-        };
-        format!("\x1b[2m{}\x1b[0m\x1b[1m{}\x1b[0m{} {}\x1b[1m{}\x1b[0m", addr(next), p.0, a, b, p.1)
-      }
+  use std::collections::BTreeMap;
+  pub fn go(inet: &INet, prev: Port, names: &mut BTreeMap<u32,String>) -> String {
+    let next = enter(inet, prev);
+    if next == ROOT {
+      "".to_string()
     } else {
-      let x = show(inet, port(addr(next), 0));
-      format!("{}\x1b[34m{}\x1b[0m", x, if slot_next == 1 { '<' } else { '>' })
+      let slot_next = slot(next);
+      if slot_next == 0 {
+        let a = go(inet, port(addr(next), 1), names);
+        let b = go(inet, port(addr(next), 2), names);
+        let k = kind(inet, addr(next));
+        if k == ERA {
+          format!("*")
+        } else {
+          let p = if k == CON {
+            ('(', ')')
+          } else if k == ANN {
+            ('[', ']')
+          } else if k >= DUP {
+            ('{', '}')
+          } else {
+            ('?', '?')
+          };
+          format!("{}\x1b[1m{}\x1b[0m{} {}\x1b[1m{}\x1b[0m", addr(next), p.0, a, b, p.1)
+        }
+      } else {
+        if let Some(name) = names.get(&prev) {
+          return name.to_string();
+        } else {
+          let name = crate::term::index_to_name(names.len() as u32 + 1);
+          let name = String::from_utf8_lossy(&name).to_string();
+          names.insert(next, name.clone());
+          return name;
+        }
+      }
     }
   }
+  return go(inet, prev, &mut BTreeMap::new());
 }
