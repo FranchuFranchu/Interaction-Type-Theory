@@ -19,7 +19,8 @@ pub const ERA : u32 = 2;
 pub const CON : u32 = 3;
 pub const ANN : u32 = 4;
 pub const FIX : u32 = 5;
-pub const DUP : u32 = 6;
+pub const ORC : u32 = 6; // It's an ORC because it kills ORBs
+pub const DUP : u32 = 7;
 
 // ROOT is port 1 on address 0.
 pub const ROOT : u32 = 1;
@@ -97,6 +98,16 @@ pub fn link(inet: &mut INet, ptr_a: u32, ptr_b: u32) {
   inet.nodes[ptr_b as usize] = ptr_a;
 }
 
+pub fn should_annihilate(mut x: u32, mut y: u32) -> bool {
+  if x == ORC {
+    x = ORB
+  };
+  if y == ORC {
+    y = ORB
+  };
+  x == y
+}
+
 // Annihilation interaction.
 // ---|\     /|---    ---, ,---
 //    | |---| |    =>     X
@@ -104,7 +115,12 @@ pub fn link(inet: &mut INet, ptr_a: u32, ptr_b: u32) {
 fn annihilate(inet: &mut INet, x: u32, y: u32) {
   if kind(inet, x) == ORB && kind(inet, y) == ORB {
     if !equal(inet, port(x,1), port(y,1)) {
-      println!("incoherent");
+      println!("because this....");
+      println!("{}", crate::syntax::readback(inet, port(x,1)));
+      println!("....must be con-equivalent to this....");
+      println!("{}", crate::syntax::readback(inet, port(y,1)));
+      println!("{}", show(inet));
+      println!("Net is not coherent. Stopping.");
       std::process::exit(0);
     }
     //println!("----------------------");
@@ -159,6 +175,7 @@ pub fn reduce(inet: &mut INet, root: Port) {
     //println!("{}", show(inet));
     //limit(500);
 
+    
     // If next is ROOT, stop.
     if next == ROOT {
       return;
@@ -206,11 +223,14 @@ pub fn eager(inet: &mut INet) {
   loop {
     let init_rules = rules;
     for index in 0 .. (inet.nodes.len() / 4) as u32 {
+      
       let kind = kind(inet, index);
       if kind != NIL {
         let prev = port(index, 0);
         let next = enter(inet, prev);
         if slot(next) == 0 {
+          let term = crate::syntax::readback(&inet, 1);
+          println!("{}", term);
           rules += 1;
           rewrite(inet, prev, next);
           break;
@@ -226,7 +246,7 @@ pub fn eager(inet: &mut INet) {
 // Rewrites an active pair.
 pub fn rewrite(inet: &mut INet, x: Port, y: Port) {
   //println!(">> rewrite {}:{} {}:{}", addr(x), slot(x), addr(y), slot(y));
-  if kind(inet, addr(x)) == kind(inet, addr(y)) {
+  if should_annihilate(kind(inet, addr(x)), kind(inet, addr(y))) {
     annihilate(inet, addr(x), addr(y));
   } else {
     commute(inet, addr(x), addr(y));

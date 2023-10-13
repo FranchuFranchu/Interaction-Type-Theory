@@ -21,8 +21,6 @@ use std::io::prelude::*;
 use std::fs::File;
 
 fn main() {
-  return test::test();
-
   let matches = App::new("My App")
     .version("1.0")
     .author("Victor Taelin <victor.taelin@gmail.com>")
@@ -47,16 +45,14 @@ fn main() {
   let mut inet = new_inet();
   inject(&mut inet, &term, ROOT);
 
+  let term = crate::syntax::readback(&inet, 1);
+  println!("{}\n", term);
   // Normalizes
   eager(&mut inet);
 
-  println!("{}", show(&inet));
   println!("\x1b[90m{:?} rewrites\x1b[0m", inet.rules);
 
-  let term = syntax::from_string(code.as_bytes());
-  let (norm, rules) = syntax::normalize(&term);
-
-  println!("{}\n", norm);
-  println!("{:?} rewrites", rules);
+  let term = crate::syntax::readback(&inet, 1);
+  println!("{}\n", term);
 
 }

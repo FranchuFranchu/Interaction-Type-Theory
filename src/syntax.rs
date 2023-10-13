@@ -67,6 +67,12 @@ pub enum Term {
 
   // Erasure
   Era,
+  
+  // Orb
+  Orb { val: Box<Term> },
+  
+  // Orc, kills orbs
+  Orc { val: Box<Term> },
 }
 
 use self::Term::{*};
@@ -357,10 +363,28 @@ pub fn inject(inet: &mut INet, term: &Term, host: Port) {
         link(net, port(set, 1), port(set, 2));
         port(set, 0)
       },
+      &Orb { ref val } => {
+        let orb = new_node(net, ORB);
+        let era = new_node(net, ERA);
+        let val = encode_term(net, val, port(orb, 0), scope, vars);
+        link(net, port(orb, 0), val);
+        link(net, port(orb, 2), port(era, 0));
+        link(net, port(era, 1), port(era, 2));
+        port(orb, 1)
+      },
+      &Orc { ref val } => {
+        let orb = new_node(net, ORC);
+        let era = new_node(net, ERA);
+        let val = encode_term(net, val, port(orb, 0), scope, vars);
+        link(net, port(orb, 0), val);
+        link(net, port(orb, 2), port(era, 0));
+        link(net, port(era, 1), port(era, 2));
+        port(orb, 1)
+      },
       Var{ref nam} => {
         vars.push((nam.to_vec(), up));
         up
-      }
+      },
     }
   }
 
@@ -432,7 +456,6 @@ pub fn readback(net : &INet, host : Port) -> Term {
   ) -> Term {
 
     if seen.contains(&next) {
-      println!("{:?}", next);
       return Var{nam: b"...".to_vec()};
     }
 
@@ -483,7 +506,7 @@ pub fn readback(net : &INet, host : Port) -> Term {
           let val = reader(net, prt, var_name, dups_vec, dups_set, seen);
           let prt = enter(net, port(addr(next), 0));
           let typ = reader(net, prt, var_name, dups_vec, dups_set, seen);
-          Ann{val: Box::new(val), typ: Box::new(typ)}
+          Lan{val: Box::new(val), typ: Box::new(typ)}
         },
       },
       // If we're visiting a fix node...
@@ -504,6 +527,19 @@ pub fn readback(net : &INet, host : Port) -> Term {
           Var { nam: b"^".to_vec() }
         }
       },
+      ORB => {
+          Orb { 
+            val: Box::new(reader(net, enter(net, port(addr(next), if slot(next) == 1 { 0 } else { 1 })), var_name, dups_vec, dups_set, seen)) 
+          }
+      }
+      ORC => {
+          Orc { 
+            val: Box::new(reader(net, enter(net, port(addr(next), if slot(next) == 1 { 0 } else { 1 })), var_name, dups_vec, dups_set, seen)) 
+          }
+      }
+      NIL => {
+        Var { nam: b"^".to_vec() }
+      }
       // If we're visiting a fan node...
       tag => match slot(next) {
         // If we're visiting a port 0, then it is a pair.
@@ -671,6 +707,14 @@ pub fn copy(space : &Vec<u8>, idx : u32, term : &Term) -> Term {
       let val = Box::new(copy(space, idx, val));
       let nxt = Box::new(copy(space, idx, nxt));
       Dup{tag, fst, snd, val, nxt}
+    },
+    Orb{val} => {
+      let val = Box::new(copy(space, idx, val));
+      Orb { val }
+    },
+    Orc{val} => {
+      let val = Box::new(copy(space, idx, val));
+      Orc { val }
     },
     Fix{nam, bod} => {
       let nam = namespace(space, idx, nam);
@@ -885,6 +929,11 @@ pub fn parse_term<'a>(code: &'a Str, ctx: &mut Context<'a>, idx: &mut u32) -> (&
       let nam = nam.to_vec();
       (code, Pol { nam, out: Box::new(out) })
     },
+    // Orc, the Orb killer: †x
+    b'\xe2' if code[1] == b'\x80' && code[2] == b'\xa0' => {
+      let (code, val) = parse_term(&code[3..], ctx, idx);
+      (code, Orc { val: Box::new(val) })
+    },
     // Any: `@`
     b'@' => {
       (&code[1..], Any)
@@ -1014,6 +1063,14 @@ pub fn to_string(term : &Term) -> Vec<Chr> {
         code.extend_from_slice(b" ");
         stringify_term(code, &out);
       },
+      &Orb{ref val} => {
+        code.extend_from_slice(b"\xc2\xb7");
+        stringify_term(code, &val)
+      },
+      &Orc{ref val} => {
+        code.extend_from_slice(b"\xe2\x80\xa0");
+        stringify_term(code, &val)
+      }
       &Any => {
         code.extend_from_slice(b"@");
       },
