@@ -14,13 +14,18 @@ pub struct INet {
 // Node types are consts because those are used in a Vec<u32>.
 pub const TAG : u32 = 28;
 pub const NIL : u32 = 0;
-pub const ORB : u32 = 1;
-pub const ERA : u32 = 2;
-pub const CON : u32 = 3;
-pub const ANN : u32 = 4;
+// Erase node
+pub const ERA : u32 = 1;
+// Con node, used for lambdas and applications
+pub const CON : u32 = 2;
+// Annotation node, used for thetas and annotations
+pub const ANN : u32 = 3;
+// Equal node, used for equality checks. Back-commutes
+pub const EQL : u32 = 4;
+// Fixpoint node. Back-commutes
 pub const FIX : u32 = 5;
-pub const ORC : u32 = 6; // It's an ORC because it kills ORBs
-pub const DUP : u32 = 7;
+// Duplication node. Front-commutes
+pub const DUP : u32 = 6;
 
 // ROOT is port 1 on address 0.
 pub const ROOT : u32 = 1;
@@ -98,13 +103,14 @@ pub fn link(inet: &mut INet, ptr_a: u32, ptr_b: u32) {
   inet.nodes[ptr_b as usize] = ptr_a;
 }
 
+pub fn should_back_commute(x: u32) -> bool {
+  x == EQL || x == FIX
+}
+pub fn should_back_annihilate(x: u32) -> bool {
+  x == EQL
+}
+
 pub fn should_annihilate(mut x: u32, mut y: u32) -> bool {
-  if x == ORC {
-    x = ORB
-  };
-  if y == ORC {
-    y = ORB
-  };
   x == y
 }
 
@@ -113,27 +119,12 @@ pub fn should_annihilate(mut x: u32, mut y: u32) -> bool {
 //    | |---| |    =>     X
 // ---|/     \|---    ---' '---
 fn annihilate(inet: &mut INet, x: u32, y: u32) {
-  if kind(inet, x) == ORB && kind(inet, y) == ORB {
-    if !equal(inet, port(x,1), port(y,1)) {
-      println!("because this....");
-      println!("{}", crate::syntax::readback(inet, port(x,1)));
-      println!("....must be con-equivalent to this....");
-      println!("{}", crate::syntax::readback(inet, port(y,1)));
-      println!("{}", show(inet));
-      println!("Net is not coherent. Stopping.");
-      std::process::exit(0);
-    }
-    //println!("----------------------");
-    //println!("{}", show(inet));
-    //println!(">> COLLAPSE {} {} {}", x, y, equal(inet, port(x,1), port(y,1)));
-    //println!("----------------------");
+  if kind(inet, x) == ANN {
+    println!("> {}", equal(inet, enter(inet, port(x, 1)), enter(inet, port(y, 1))));
+    println!("> {}", equal(inet, enter(inet, port(x, 2)), enter(inet, port(y, 2))));
   }
-  let p0 = enter(inet, port(x, 1));
-  let p1 = enter(inet, port(y, 1));
-  link(inet, p0, p1);
-  let p0 = enter(inet, port(x, 2));
-  let p1 = enter(inet, port(y, 2));
-  link(inet, p0, p1);
+  link(inet, enter(inet, port(x, 1)), enter(inet, port(y, 1)));
+  link(inet, enter(inet, port(x, 2)), enter(inet, port(y, 2)));
   erase(inet, x);
   erase(inet, y);
 }
@@ -147,22 +138,65 @@ fn annihilate(inet: &mut INet, x: u32, y: u32) {
 //                    ---|#|       | |---
 //                        \|-------|/
 fn commute(inet: &mut INet, x: u32, y: u32) {
-  let t = kind(inet, x);
-  let a = new_node(inet, t);
-  let t = kind(inet, y);
-  let b = new_node(inet, t);
-  let t = enter(inet, port(x, 1));
-  link(inet, port(b, 0), t);
-  let t = enter(inet, port(x, 2));
-  link(inet, port(y, 0), t);
-  let t = enter(inet, port(y, 1));
-  link(inet, port(a, 0), t);
-  let t = enter(inet, port(y, 2));
-  link(inet, port(x, 0), t);
+  let a = new_node(inet, kind(inet, x));
+  let b = new_node(inet, kind(inet, y));
+  link(inet, port(b, 0), enter(inet, port(x, 1)));
+  link(inet, port(y, 0), enter(inet, port(x, 2)));
+  link(inet, port(a, 0), enter(inet, port(y, 1)));
+  link(inet, port(x, 0), enter(inet, port(y, 2)));
   link(inet, port(a, 1), port(b, 1));
   link(inet, port(a, 2), port(y, 1));
   link(inet, port(x, 1), port(b, 2));
   link(inet, port(x, 2), port(y, 2));
+}
+
+// Back-Commute interaction.
+//                        /|-------|\
+//    x      y        ---|#|       | |---
+// ---|\     /|---        \|--, ,--|/
+//    | |---|#|    =>          X
+// ---|/     \|---        /|--' '--|\
+//                    ---|#|       | |---
+//                        \|-------|/
+//
+//     y     x                   a
+// ---|\                      ---|\       
+//    | |---|\                   |#|,  b  
+// ---|/    |#|--- =>      ---, ,|/  '|\     
+//----------|/                 X      | |-----
+//                        /|, / '|\  ,|/
+//                    ---| | X   |#|'
+//                        \|' '--|/    
+//                         y      x
+//
+fn back_commute(inet: &mut INet, x: u32, y: u32, p: u32) {
+  let (p1, p2) = if p == 1 {
+    (1, 2)
+  } else {
+    (2, 1)
+  };
+  let a = new_node(inet, kind(inet, x));
+  let b = new_node(inet, kind(inet, y));
+  link(inet, port(b, 0), enter(inet, port(x, 0)));
+  link(inet, port(y, 0), enter(inet, port(x, p2)));
+  link(inet, port(a, p1), enter(inet, port(y, p1)));
+  link(inet, port(x, p1), enter(inet, port(y, p2)));
+  link(inet, port(a, p2), port(y, p1));
+  link(inet, port(x, p2), port(y, p2));
+  link(inet, port(a, 0), port(b, p1));
+  link(inet, port(x, 0), port(b, p2));
+}
+
+fn cross(inet: &mut INet, x: u32, y: u32, k: u32) {
+  let a = new_node(inet, k);
+  let b = new_node(inet, k);
+  link(inet, port(a, 2), enter(inet, port(x, 1)));
+  link(inet, port(a, 1), enter(inet, port(y, 1)));
+  link(inet, port(b, 2), enter(inet, port(x, 2)));
+  link(inet, port(b, 1), enter(inet, port(y, 2)));
+  link(inet, port(a, 0), port(b, 0));
+  erase(inet, x);
+  erase(inet, y);
 }
 
 // Reduces a wire to weak normal form.
@@ -181,6 +215,7 @@ pub fn reduce(inet: &mut INet, root: Port) {
       return;
     }
     // If next is a main port...
+    println!("{:?}", slot(next));
     if slot(next) == 0 {
 
       // If prev is a main port, reduce the active pair.
@@ -215,11 +250,59 @@ pub fn normal(inet: &mut INet, root: Port) {
     }
   }
 }
+#[derive(Debug, Clone)]
+pub enum ActivePairType {
+  Annihilate,
+  Commute,
+  Cross(u32),
+  BackCommute(u32),
+  ReverseBackCommute(u32),
+}
+impl ActivePairType {
+  fn from_port(inet: &INet, x: u32) -> Option<ActivePairType> {
+    let y = enter(inet, x);
+    let x_kind = kind(inet, addr(x));
+    let y_kind = kind(inet, addr(y));
+    let x_back = should_back_commute(x_kind) && x_kind != y_kind || should_back_annihilate(x_kind) && x_kind == y_kind;
+    let y_back = should_back_commute(y_kind) && x_kind != y_kind || should_back_annihilate(y_kind) && x_kind == y_kind;
+    let x_active = (slot(x) == 0) && !x_back || (slot(x) != 0) && x_back;
+    let y_active = (slot(y) == 0) && !y_back || (slot(y) != 0) && y_back;
+    if x_active && y_active {
+      if x_kind == y_kind {
+        if x_back {
+          None
+        } else if y_back {
+          None
+        } /*else if x_kind == ANN {
+          Some(Self::Cross(EQL))
+        } */else {
+          Some(Self::Annihilate)
+        }
+      } else {
+        if x_back && y_back {
+          todo!()
+        } else if x_back {
+          Some(Self::BackCommute(slot(x)))
+        } else if y_back {
+          Some(Self::ReverseBackCommute(slot(y)))
+        } else {
+          Some(Self::Commute)
+        }
+      }
+    } else {
+      None
+    }
+  }
+}
 
 // Eager reduction
 // FIXME: wrote this quickly to test the checker, obviously very inefficient
 pub fn eager(inet: &mut INet) {
   let mut rules = 0;
+  let mut old_ann: Option<(u32, u32)> = None;
+  let mut old_com: Option<(u32, u32, u32, u32)> = None;
+  let mut cols = ((1, 2, 3), (5, 6, 3));
+  let term = crate::syntax::readback(&inet, 1);
   loop {
     let init_rules = rules;
     for index in 0 .. (inet.nodes.len() / 4) as u32 {
@@ -228,11 +311,40 @@ pub fn eager(inet: &mut INet) {
       if kind != NIL {
         let prev = port(index, 0);
         let next = enter(inet, prev);
-        if slot(next) == 0 {
-          let term = crate::syntax::readback(&inet, 1);
-          println!("{}", term);
+        if let Some(active_pair_type) = ActivePairType::from_port(inet, prev) {
+          let mut h = std::collections::HashMap::new();
+          let a1 = port(index, 1);
+          let a2 = port(index, 2);
+          let b1 = port(addr(next), 1);
+          let b2 = port(addr(next), 2);
+          h.insert(prev, cols.0.0);
+          h.insert(a2, cols.0.0);
+          h.insert(a1, cols.0.0);
+          h.insert(next, cols.0.1);
+          h.insert(b1, cols.0.1);
+          h.insert(b2, cols.0.1);
+          if let Some((a0, a1, b0, b1)) = old_com.take() {
+            
+          }
+          if let Some((a, b)) = old_ann.take() {
+            h.insert(a, cols.1.2);
+            h.insert(b, cols.1.2);
+          }
+          
+          let term = crate::syntax::readback_and_highlight(&inet, 1, &h);
+          println!("> {}", term);
+          println!("{:?}", active_pair_type);
           rules += 1;
-          rewrite(inet, prev, next);
+          match active_pair_type {
+            ActivePairType::Annihilate => annihilate(inet, addr(prev), addr(next)),
+            ActivePairType::Commute => commute(inet, addr(prev), addr(next)),
+            ActivePairType::Cross(k) => cross(inet, addr(prev), addr(next), k),
+            ActivePairType::BackCommute(p) => back_commute(inet, addr(prev), addr(next), p),
+            ActivePairType::ReverseBackCommute(p) => back_commute(inet, addr(next), addr(prev), p),
+          };
+          
+          cols = (cols.1, cols.0);
+          
           break;
         }
       }
@@ -245,11 +357,15 @@ pub fn eager(inet: &mut INet) {
 
 // Rewrites an active pair.
 pub fn rewrite(inet: &mut INet, x: Port, y: Port) {
-  //println!(">> rewrite {}:{} {}:{}", addr(x), slot(x), addr(y), slot(y));
-  if should_annihilate(kind(inet, addr(x)), kind(inet, addr(y))) {
-    annihilate(inet, addr(x), addr(y));
+  //println!(">> rewrite {}:{}/{} {}:{}/{}", addr(x), slot(x), kind(inet, addr(x)), addr(y), slot(y), kind(inet, addr(y)));
+  if should_back_commute(kind(inet, addr(x))) && !should_back_commute(kind(inet, addr(y))) {
+    back_commute(inet, x, y, 1)
   } else {
-    commute(inet, addr(x), addr(y));
+    if (kind(inet, addr(x)) == kind(inet, addr(y))) {
+      annihilate(inet, addr(x), addr(y));
+    } else {
+      commute(inet, addr(x), addr(y));
+    } 
   }
 }
 
@@ -269,18 +385,22 @@ pub fn compare(inet: &mut INet, step: u32, flip: bool,
   b0: Port, bR: Port, bP: &mut Path, bL: &mut Logs,
 ) -> bool {
   // FIXME: still can't handle loops, so we just halt deep recs for now
-  let halt = 64;
+  let halt = 8192;
   let step = step + 1;
+  
 
   let a1 = enter(inet, a0);
   let aS = slot(a1);
   let aK = kind(inet, addr(a1));
 
   //println!("- leap {} {} | {}:{}->{}:{} {}:{} | aR={}:{} | {:?} {:?}", step, flip, addr(a0), slot(a0), addr(a1), slot(a1), addr(b0), slot(b0), addr(aR), slot(aR), aP, bP);
-  //limit(50);
+  //limit(1000000);
 
   // If on root...
-  if step > halt || a1 == aR || a1 == ROOT {
+  if step > halt {
+    panic!("{:?}", "Loop detected!");
+  }
+  if a1 == aR || a1 == ROOT {
     // If didn't move 'b' yet, flip and recurse...
     if flip {
       return compare(inet, 0, false, b0, bR, bP, bL, a0, aR, aP, aL);
@@ -294,6 +414,10 @@ pub fn compare(inet: &mut INet, step: u32, flip: bool,
 
   // If entering main port...
   if aS == 0 {
+    if (aK == ERA) {
+      println!("{:?}", aK);
+      return false
+    } 
     // If deque isn't empty, pop_back a slot and move to it
     if let Some(slot) = aP.get_mut(&aK).and_then(|vec| vec.pop_back()) {
       aL.push(format!("down({}:{})", addr(a1), slot));
@@ -342,9 +466,6 @@ pub fn show_tree(inet: &INet, prev: Port, names: &mut BTreeMap<u32,String>) -> S
   if next == ROOT {
     return "@".to_string();
   }
-  //if kind == ORB && slot(next) == 0 {
-    //return format!("\x1b[2m{}\x1b[0m${}", addr(next), show_tree(inet, port(addr(next), 1), names));
-  //}
   if slot(next) == 0 {
     //if kind == ERA {
       //return format!("*");
@@ -355,7 +476,6 @@ pub fn show_tree(inet: &INet, prev: Port, names: &mut BTreeMap<u32,String>) -> S
         ERA => ('«', '»'),
         CON => ('(', ')'),
         ANN => ('[', ']'),
-        ORB => ('<', '>'),
         _   => ('{', '}'),
       };
       return format!("\x1b[2m{}\x1b[0m\x1b[1m{}\x1b[0m{} {}\x1b[1m{}\x1b[0m", addr(next), p.0, a, b, p.1);
@@ -398,6 +518,7 @@ pub fn limit(lim: i32) {
   unsafe {
     COUNTER += 1;
     if COUNTER >= lim {
+      println!("{:?}", "Loop detected");
       std::process::exit(0);
     }
   }

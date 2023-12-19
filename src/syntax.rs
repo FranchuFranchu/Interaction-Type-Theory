@@ -26,9 +26,6 @@ use self::rand::Rng;
 
 #[derive(Clone, Debug)]
 pub enum Term {
-  // Abstractions
-  Lam {nam: Vec<u8>, bod: Box<Term>},
-
   // Applications
   App {fun: Box<Term>, arg: Box<Term>},
 
@@ -38,29 +35,17 @@ pub enum Term {
   // Duplications
   Dup {tag: u32, fst: Vec<u8>, snd: Vec<u8>, val: Box<Term>, nxt: Box<Term>},
 
-  // Recursion
-  Fix {nam: Vec<u8>, bod: Box<Term>},
-
-  // Light-annotations
-  Lan {val: Box<Term>, typ: Box<Term>},
-  
   // Annotations
   Ann {val: Box<Term>, typ: Box<Term>},
 
   // Arrow (simple function)
   Arr {inp: Box<Term>, out: Box<Term>},
-
-  // Forall (dependent function)
-  All {nam: Vec<u8>, inp: Box<Term>, out: Box<Term>},
-
-  // Polymorphism (polymorphic function)
-  Pol {nam: Vec<u8>, out: Box<Term>},
-
+  
   // Variables
   Var {nam: Vec<u8>}, 
   
   // Type-lambda
-  Tla {nam: Vec<u8>, bod: Box<Term> },
+  Tla {inp: Box<Term>, out: Box<Term> },
 
   // Any
   Any,
@@ -68,11 +53,8 @@ pub enum Term {
   // Erasure
   Era,
   
-  // Orb
-  Orb { val: Box<Term> },
-  
-  // Orc, kills orbs
-  Orc { val: Box<Term> },
+  // Highlight
+  Hig { val: Box<Term>, col: u32 },
 }
 
 use self::Term::{*};
@@ -90,37 +72,17 @@ pub fn inject(inet: &mut INet, term: &Term, host: Port) {
     vars  : &mut Vec<(Vec<u8>,u32)>
   ) -> Port {
     match term {
-      // A lambda becomes to a con node. Ports:
-      // - 0: points to where the lambda occurs.
-      // - 1: points to the lambda variable.
-      // - 2: points to the lambda body.
-      &Lam { ref nam, ref bod } => {
-        let fun = new_node(net, CON);
-        scope.insert(nam.to_vec(), port(fun, 1));
-        if nam == b"*" {
-          let era = new_node(net, ERA);
-          link(net, port(era, 1), port(era, 2));
-          link(net, port(fun, 1), port(era, 0));
-        }
-        let bod = encode_term(net, bod, port(fun, 2), scope, vars);
-        link(net, port(fun, 2), bod);
-        port(fun, 0)
-      },
-      // A type-lambda becomes an ann node. Ports:
-      // - 0: points to where the lambda occurs.
-      // - 1: points to the lambda variable.
-      // - 2: points to the lambda body.
-      &Tla { ref nam, ref bod } => {
-        let fun = new_node(net, ANN);
-        scope.insert(nam.to_vec(), port(fun, 1));
-        if nam == b"*" {
-          let era = new_node(net, ERA);
-          link(net, port(era, 1), port(era, 2));
-          link(net, port(fun, 1), port(era, 0));
-        }
-        let bod = encode_term(net, bod, port(fun, 2), scope, vars);
-        link(net, port(fun, 2), bod);
-        port(fun, 0)
+      // Arrow becomes a CON node. Ports:
+      // - 0: points to where the arrow occurs.
+      // - 1: points to the input type of the arrow.
+      // - 2: points to the output type of the arrow.
+      &Arr { ref inp, ref out } => {
+        let arr = new_node(net, CON);
+        let inp = encode_term(net, inp, port(arr, 1), scope, vars);
+        link(net, port(arr, 1), inp);
+        let out = encode_term(net, out, port(arr, 2), scope, vars);
+        link(net, port(arr, 2), out);
+        port(arr, 0)
       },
       // An application becomes to a con node too. Ports:
       // - 0: points to the function being applied.
@@ -134,37 +96,29 @@ pub fn inject(inet: &mut INet, term: &Term, host: Port) {
         link(net, port(app, 1), arg);
         port(app, 2)
       },
+      // A type-lambda becomes an ann node. Ports:
+      // - 0: points to where the lambda occurs.
+      // - 1: points to the lambda variable.
+      // - 2: points to the lambda body.
+      &Tla { ref inp, ref out } => {
+        let arr = new_node(net, ANN);
+        let inp = encode_term(net, inp, port(arr, 1), scope, vars);
+        link(net, port(arr, 1), inp);
+        let out = encode_term(net, out, port(arr, 2), scope, vars);
+        link(net, port(arr, 2), out);
+        port(arr, 0)
+      },
       // An annotation becomes an ANN node. Ports:
       // - 0: points to the type of the annotation.
       // - 1: points to where the annotation occurs.
       // - 2: points to the value being annotated.
       &Ann{ref val, ref typ} => {
-        //let ann = new_node(net, ANN);
-        //let val = encode_term(net, val, port(ann, 2), scope, vars);
-        //link(net, port(ann, 2), val);
-        //let typ = encode_term(net, typ, port(ann, 0), scope, vars);
-        //link(net, port(ann, 0), typ);
-        //port(ann, 1)
         let ann = new_node(net, ANN);
-        let orb = new_node(net, ORB);
-        let era = new_node(net, ERA);
-        let val = encode_term(net, val, port(orb, 0), scope, vars);
-        link(net, port(orb, 0), val);
-        link(net, port(orb, 1), port(ann, 2));
-        link(net, port(orb, 2), port(era, 0));
-        link(net, port(era, 1), port(era, 2));
-        let typ = encode_term(net, typ, port(ann, 0), scope, vars);
-        link(net, port(ann, 0), typ);
-        port(ann, 1)
-      },
-      // Light-annotation, without ORB
-      &Lan {ref val, ref typ} => {
-        let ann = new_node(net, ANN);
-        let typ = encode_term(net, typ, port(ann, 0), scope, vars);
         let val = encode_term(net, val, port(ann, 2), scope, vars);
+        link(net, val, port(ann, 1));
+        let typ = encode_term(net, typ, port(ann, 0), scope, vars);
         link(net, port(ann, 0), typ);
-        link(net, port(ann, 2), val);
-        port(ann, 1)
+        port(ann, 2)
       },
       // A pair becomes a dup node. Ports:
       // - 0: points to where the pair occurs.
@@ -178,12 +132,8 @@ pub fn inject(inet: &mut INet, term: &Term, host: Port) {
         link(net, port(dup, 2), snd);
         port(dup, 0)
       },
-      // A dup becomes a dup node too. Ports:
-      // - 0: points to the value projected.
-      // - 1: points to the occurrence of the first variable.
-      // - 2: points to the occurrence of the second variable.
       &Dup{tag, ref fst, ref snd, ref val, ref nxt} => {
-        let dup = new_node(net, DUP + tag);
+        let dup = new_node(net, tag);
         scope.insert(fst.to_vec(), port(dup, 1));
         scope.insert(snd.to_vec(), port(dup, 2));
         // If the first variable is unused, create an erase node.
@@ -202,189 +152,21 @@ pub fn inject(inet: &mut INet, term: &Term, host: Port) {
         link(net, val, port(dup, 0));
         encode_term(net, &nxt, up, scope, vars)
       },
-      // A fix becomes a fix node.
-      &Fix { ref nam, ref bod } => {
-        let fix = new_node(net, FIX);
-        scope.insert(nam.to_vec(), port(fix, 1));
-        // If the variable is unused, create an erase node.
-        if nam == b"*" {
-          let era = new_node(net, ERA);
-          link(net, port(era, 1), port(era, 2));
-          link(net, port(fix, 1), port(era, 0));
-        }
-        let bod = encode_term(net, bod, port(fix, 0), scope, vars);
-        link(net, port(fix, 0), bod);
-        port(fix, 2)
-      },
-      // Arrow becomes a CON node. Ports:
-      // - 0: points to where the arrow occurs.
-      // - 1: points to the input type of the arrow.
-      // - 2: points to the output type of the arrow.
-      &Arr { ref inp, ref out } => {
-        let arr = new_node(net, CON);
-        let inp = encode_term(net, inp, port(arr, 1), scope, vars);
-        link(net, port(arr, 1), inp);
-        let out = encode_term(net, out, port(arr, 2), scope, vars);
-        link(net, port(arr, 2), out);
-        port(arr, 0)
-
-        //let arr = new_node(net, CON);
-        //let c_i = new_node(net, CHK);
-        //let c_o = new_node(net, CHK);
-        //let inp = encode_term(net, inp, port(c_i, 1), scope, vars);
-        //let out = encode_term(net, out, port(c_o, 1), scope, vars);
-        //link(net, port(arr, 1), port(c_i, 0));
-        //link(net, port(arr, 2), port(c_o, 0));
-        //link(net, port(c_i, 2), port(c_o, 2));
-        //link(net, port(c_i, 1), inp);
-        //link(net, port(c_o, 1), out);
-        //port(arr, 0)
-
-        //let arr = new_node(net, CON);
-        //let c_i = new_node(net, CHK);
-        //let c_o = new_node(net, CHK);
-        //let inp = encode_term(net, inp, port(c_i, 1), scope, vars);
-        //let out = encode_term(net, out, port(c_o, 1), scope, vars);
-        //link(net, port(arr, 1), port(c_i, 0));
-        //link(net, port(arr, 2), port(c_o, 0));
-        //link(net, port(c_i, 2), port(c_o, 2));
-        //link(net, port(c_i, 1), inp);
-        //link(net, port(c_o, 1), out);
-        //port(arr, 0)
-      },
-      // Forall nodes become the following net:
-      // - all = CON @ a {out(X)}
-      // - an0 = ANN a b c
-      // - an1 = ANN {inp} b d
-      // - dup = DUP d {X} c
-      // Using the same conventions as Pol.
-      &All { ref nam, ref inp, ref out } => {
-        let all = new_node(net, CON);
-        let an0 = new_node(net, ANN);
-        let an1 = new_node(net, ANN);
-        let dup = new_node(net, DUP);
-        link(net, port(an0, 0), port(all, 1));
-        link(net, port(an0, 1), port(an1, 1));
-        link(net, port(an0, 2), port(dup, 2));
-        scope.insert(nam.to_vec(), port(dup, 1));
-        let inp = encode_term(net, inp, port(an1, 0), scope, vars);
-        link(net, port(an1, 0), inp);
-        link(net, port(an1, 2), port(dup, 0));
-        let out = encode_term(net, out, port(all, 2), scope, vars);
-        link(net, port(all, 2), out);
-        port(all, 0)
-
-        //let all = new_node(net, CON);
-        //let an0 = new_node(net, ANN);
-        //let an1 = new_node(net, ANN);
-        //let c_i = new_node(net, CHK);
-        //let c_o = new_node(net, CHK);
-        //let dup = new_node(net, DUP + 1);
-        //link(net, port(c_i, 2), port(c_o, 2));
-        //link(net, port(c_i, 0), port(all, 1));
-        //link(net, port(c_o, 0), port(all, 2));
-        //link(net, port(an0, 0), port(c_i, 1));
-        //link(net, port(an0, 1), port(an1, 1));
-        //link(net, port(an0, 2), port(dup, 2));
-        //scope.insert(nam.to_vec(), port(dup, 1));
-        //let inp = encode_term(net, inp, port(an1, 0), scope, vars);
-        //link(net, port(an1, 0), inp);
-        //link(net, port(an1, 2), port(dup, 0));
-        //let out = encode_term(net, out, port(c_o, 1), scope, vars);
-        //link(net, port(c_o, 1), out);
-        //port(all, 0)
-      },
-      // Polymorphism nodes become the following net:
-      // - pol = CON @ a {out(x)}
-      // - ann = ANN a {x} d
-      // - era = ERA d e e
-      &Pol { ref nam, ref out } => {
-        let pol = new_node(net, CON);
-        let ann = new_node(net, ANN);
-        link(net, port(ann, 0), port(pol, 1));
-        let era = new_node(net, ERA);
-        link(net, port(era, 1), port(era, 2));
-        link(net, port(ann, 2), port(era, 0));
-        scope.insert(nam.to_vec(), port(ann, 1));
-        let out = encode_term(net, out, port(pol, 2), scope, vars);
-        link(net, port(pol, 2), out);
-        port(pol, 0)
-
-        //let pol = new_node(net, CON);
-        //let c_i = new_node(net, CHK);
-        //let c_o = new_node(net, CHK);
-        //let ann = new_node(net, ANN);
-        //link(net, port(c_i, 2), port(c_o, 2));
-        //link(net, port(c_i, 0), port(pol, 1));
-        //link(net, port(c_o, 0), port(pol, 2));
-        //link(net, port(ann, 0), port(c_i, 1));
-        //let era = new_node(net, ERA);
-        //link(net, port(era, 1), port(era, 2));
-        //link(net, port(ann, 2), port(era, 0));
-        //scope.insert(nam.to_vec(), port(ann, 1));
-        //let out = encode_term(net, out, port(c_o, 1), scope, vars);
-        //link(net, port(c_o, 1), out);
-        //port(pol, 0)
-        
-        //let pol = new_node(net, CON);
-        //let ann = new_node(net, ANN);
-        //let dup = new_node(net, DUP);
-        //link(net, port(ann, 0), port(pol, 1));
-        //link(net, port(ann, 1), port(dup, 2));
-        //link(net, port(ann, 2), port(dup, 0));
-        //scope.insert(nam.to_vec(), port(dup, 1));
-        //let out = encode_term(net, out, port(pol, 2), scope, vars);
-        //link(net, port(pol, 2), out);
-        //port(pol, 0)
-
-        //let all = new_node(net, CON);
-        //let an0 = new_node(net, ANN);
-        //let an1 = new_node(net, ANN);
-        //let dup = new_node(net, DUP);
-        //let era = new_node(net, ERA);
-        //link(net, port(an0, 0), port(all, 1));
-        //link(net, port(an0, 1), port(an1, 1));
-        //link(net, port(an1, 0), port(dup, 2));
-        //scope.insert(nam.to_vec(), port(dup, 1));
-        //link(net, port(era, 0), port(an0, 2));
-        //link(net, port(era, 1), port(era, 2));
-        //link(net, port(an1, 2), port(dup, 0));
-        //let out = encode_term(net, out, port(all, 2), scope, vars);
-        //link(net, port(all, 2), out);
-        //port(all, 0)
-      },
-      &Any => {
-        let set = new_node(net, ANN);
-        link(net, port(set, 1), port(set, 2));
-        port(set, 0)
-      },
       &Era => {
         let set = new_node(net, ERA);
         link(net, port(set, 1), port(set, 2));
         port(set, 0)
       },
-      &Orb { ref val } => {
-        let orb = new_node(net, ORB);
-        let era = new_node(net, ERA);
-        let val = encode_term(net, val, port(orb, 0), scope, vars);
-        link(net, port(orb, 0), val);
-        link(net, port(orb, 2), port(era, 0));
-        link(net, port(era, 1), port(era, 2));
-        port(orb, 1)
-      },
-      &Orc { ref val } => {
-        let orb = new_node(net, ORC);
-        let era = new_node(net, ERA);
-        let val = encode_term(net, val, port(orb, 0), scope, vars);
-        link(net, port(orb, 0), val);
-        link(net, port(orb, 2), port(era, 0));
-        link(net, port(era, 1), port(era, 2));
-        port(orb, 1)
-      },
       Var{ref nam} => {
         vars.push((nam.to_vec(), up));
         up
       },
+      Any => {
+        todo!();
+      }
+      Hig{ref val, ..} => {
+        encode_term(net, val, up, scope, vars)
+      }
     }
   }
 
@@ -394,31 +176,35 @@ pub fn inject(inet: &mut INet, term: &Term, host: Port) {
 
   // Encodes the main term.
   let main = encode_term(inet, &term, host, &mut scope, &mut vars);
-
+  
   // Links bound variables.
   for i in 0..vars.len() {
-    let (ref nam, var) = vars[i];
-    match scope.get(nam) {
-      Some(next) => {
-        let next = *next;
-        if enter(&inet, next) == next {
-          link(inet, var, next);
-        } else {
-          panic!("Variable used more than once: {}.", std::str::from_utf8(nam).unwrap());
+    let (ref name1, var1) = vars[i];
+    if enter(inet, var1) != var1 {
+      // This means we've already connected this variable
+      continue;
+    }
+    
+    // Connect it with the other use of this variable.
+    let mut found = false;
+    for j in i+1..vars.len() {
+      let (ref name2, var2) = vars[j];  
+      if name1 == name2 {
+        if found {
+          panic!("Variable {:?} bound/used more than twice!", name1);
         }
-      },
-      None => panic!("Unbound variable: {}.", std::str::from_utf8(nam).unwrap())
+        found = true;
+        link(inet, var1, var2);
+      }
+    }
+    // Connects unbound variables to erasure nodes
+    if (!found) {
+      let era = new_node(inet, ERA);
+      link(inet, port(era, 1), port(era, 2));
+      link(inet, var1, port(era, 0));
     }
   }
 
-  // Connects unbound variables to erasure nodes
-  for (_, addr) in scope {
-    if enter(&inet, addr) == addr {
-      let era = new_node(inet, ERA);
-      link(inet, port(era, 1), port(era, 2));
-      link(inet, addr, port(era, 0));
-    }
-  }
 
   link(inet, host, main);
 }
@@ -432,6 +218,10 @@ pub fn to_net(term: &Term) -> INet {
 
 // Converts an inet to a term, reading from location.
 pub fn readback(net : &INet, host : Port) -> Term {
+  readback_and_highlight(net, host, &HashMap::new())
+}
+
+pub fn readback_and_highlight(net: &INet, host: Port, highlight: &HashMap<u32, u32>) -> Term {
   // Given a port, returns its name, or assigns one if it wasn't named yet.
   fn name_of(net : &INet, var_port : Port, var_name : &mut HashMap<u32, Vec<u8>>) -> Vec<u8> {
     // If port is linked to an erase node, return an unused variable
@@ -452,28 +242,36 @@ pub fn readback(net : &INet, host : Port) -> Term {
     var_name : &mut HashMap<u32, Vec<u8>>,
     dups_vec : &mut Vec<u32>,
     dups_set : &mut HashSet<u32>,
-    seen     : &mut HashSet<u32>
+    seen     : &mut HashSet<u32>,
+    head_top : &mut HashSet<u32>,
+    highlight: &HashMap<u32, u32>,
   ) -> Term {
 
+    /*
     if seen.contains(&next) {
       return Var{nam: b"...".to_vec()};
     }
-
+    */
     seen.insert(next);
 
-    match kind(net, addr(next)) {
+    let term = match kind(net, addr(next)) {
       // If we're visiting a eraser...
       ERA => Era,
       // If we're visiting a con node...
       CON => match slot(next) {
-        // If we're visiting a port 0, then it is a lambda.
+        // If we're visiting a port 0, then it is a lambda / arrow.
         0 => {
-          let nam = name_of(net, port(addr(next), 1), var_name);
-          let prt = enter(net, port(addr(next), 2));
-          let bod = reader(net, prt, var_name, dups_vec, dups_set, seen);
-          let ann = enter(net, port(addr(next), 1));
-          let lam = Lam { nam: nam, bod: Box::new(bod) };
-          lam
+          if head_top.contains(&addr(next)) {
+            // It is a variable
+            Var{nam: name_of(net, enter(net, next), var_name)}
+          } else {
+            head_top.insert(addr(next));
+            let prt = enter(net, port(addr(next), 2));
+            let out = reader(net, prt, var_name, dups_vec, dups_set, seen, head_top, highlight);
+            let prt = enter(net, port(addr(next), 1));
+            let inp = reader(net, prt, var_name, dups_vec, dups_set, seen, head_top, highlight);
+            Arr { inp: Box::new(inp), out: Box::new(out) }
+          }
         },
         // If we're visiting a port 1, then it is a variable.
         1 => {
@@ -482,86 +280,79 @@ pub fn readback(net : &INet, host : Port) -> Term {
         },
         // If we're visiting a port 2, then it is an application.
         _ => {
-          let prt = enter(net, port(addr(next), 0));
-          let fun = reader(net, prt, var_name, dups_vec, dups_set, seen);
-          let prt = enter(net, port(addr(next), 1));
-          let arg = reader(net, prt, var_name, dups_vec, dups_set, seen);
-          App{fun: Box::new(fun), arg: Box::new(arg)}
+          if head_top.contains(&addr(next)) {
+            // It is a variable
+            Var{nam: name_of(net, enter(net, next), var_name)}
+          } else {
+            head_top.insert(addr(next));
+            let prt = enter(net, port(addr(next), 0));
+            let fun = reader(net, prt, var_name, dups_vec, dups_set, seen, head_top, highlight);
+            let prt = enter(net, port(addr(next), 1));
+            let arg = reader(net, prt, var_name, dups_vec, dups_set, seen, head_top, highlight);
+            App{fun: Box::new(fun), arg: Box::new(arg)}
+          }
         }
       },
       // If we're visiting an ANN node...
       ANN => match slot(next) {
-        // If we're visiting a port 0, then it is an ann-lambda
         0 => {
-          let nam = name_of(net, port(addr(next), 1), var_name);
-          let prt = enter(net, port(addr(next), 2));
-          let bod = reader(net, prt, var_name, dups_vec, dups_set, seen);
-          let ann = enter(net, port(addr(next), 1));
-          let lam = Tla { nam: nam, bod: Box::new(bod) };
-          lam
+          if head_top.contains(&addr(next)) {
+            // It is a variable
+            Var{nam: name_of(net, enter(net, next), var_name)}
+          } else {
+            head_top.insert(addr(next));
+            let prt = enter(net, port(addr(next), 2));
+            let out = reader(net, prt, var_name, dups_vec, dups_set, seen, head_top, highlight);
+            let prt = enter(net, port(addr(next), 1));
+            let inp = reader(net, prt, var_name, dups_vec, dups_set, seen, head_top, highlight);
+            Tla { inp: Box::new(inp), out: Box::new(out) }
+          }
         },
-        // If we're visiting a port 1, then it is where the annotation occurs.
-        _ => {
-          let prt = enter(net, port(addr(next), if slot(next) == 1 { 2 } else { 1 }));
-          let val = reader(net, prt, var_name, dups_vec, dups_set, seen);
-          let prt = enter(net, port(addr(next), 0));
-          let typ = reader(net, prt, var_name, dups_vec, dups_set, seen);
-          Lan{val: Box::new(val), typ: Box::new(typ)}
-        },
-      },
-      // If we're visiting a fix node...
-      FIX => match slot(next) {
-        // If we're visiting a port 2, then it is a recursive term.
-        2 => {
-          let nam = name_of(net, port(addr(next), 1), var_name);
-          let prt = enter(net, port(addr(next), 0));
-          let bod = reader(net, prt, var_name, dups_vec, dups_set, seen);
-          Fix { nam: nam, bod: Box::new(bod) }
-        },
-        // If we're visiting a port 1, then it is a fixed point occurrence.
         1 => {
-          Var { nam: name_of(net, next, var_name) }
+          Var{nam: name_of(net, next, var_name)}
         },
-        // We shouldn't be able to visit a port 0
         _ => {
-          Var { nam: b"^".to_vec() }
+          if head_top.contains(&addr(next)) {
+            // It is a variable
+            Var{nam: name_of(net, enter(net, next), var_name)}
+          } else {
+            head_top.insert(addr(next));
+            let prt = enter(net, port(addr(next), 0));
+            let typ = reader(net, prt, var_name, dups_vec, dups_set, seen, head_top, highlight);
+            let prt = enter(net, port(addr(next), 1));
+            let val = reader(net, prt, var_name, dups_vec, dups_set, seen, head_top, highlight);
+            Ann{ val: Box::new(val), typ: Box::new(typ)}
+          }
         }
       },
-      ORB => {
-          Orb { 
-            val: Box::new(reader(net, enter(net, port(addr(next), if slot(next) == 1 { 0 } else { 1 })), var_name, dups_vec, dups_set, seen)) 
-          }
-      }
-      ORC => {
-          Orc { 
-            val: Box::new(reader(net, enter(net, port(addr(next), if slot(next) == 1 { 0 } else { 1 })), var_name, dups_vec, dups_set, seen)) 
-          }
-      }
       NIL => {
-        Var { nam: b"^".to_vec() }
-      }
+        Var { nam: b"<NIL>".to_vec() }
+      },
       // If we're visiting a fan node...
       tag => match slot(next) {
         // If we're visiting a port 0, then it is a pair.
         0 => {
-          let tag = tag - DUP;
+          let tag = tag;
           let prt = enter(net, port(addr(next), 1));
-          let fst = reader(net, prt, var_name, dups_vec, dups_set, seen);
+          let fst = reader(net, prt, var_name, dups_vec, dups_set, seen, head_top, highlight);
           let prt = enter(net, port(addr(next), 2));
-          let snd = reader(net, prt, var_name, dups_vec, dups_set, seen);
+          let snd = reader(net, prt, var_name, dups_vec, dups_set, seen, head_top, highlight);
           Sup{tag, fst: Box::new(fst), snd: Box::new(snd)}
         },
         // If we're visiting a port 1 or 2, then it is a variable.
         // Also, that means we found a dup, so we store it to read later.
         _ => {
-          if !dups_set.contains(&addr(next)) {
-            dups_set.insert(addr(next));
+          if dups_set.insert(addr(next)) {
             dups_vec.push(addr(next));
-          }
-          //Var{nam: format!("{}@{}", String::from_utf8_lossy(&name_of(net, next, var_name)), addr(next)).into()}
+          };
           Var{nam: name_of(net, next, var_name)}
         }
       }
+    };
+    if let Some(color) = highlight.get(&next) {
+      Hig { val: Box::new(term), col: *color }
+    } else {
+      term
     }
   }
 
@@ -575,21 +366,23 @@ pub fn readback(net : &INet, host : Port) -> Term {
   let mut dups_vec = Vec::new();
   let mut dups_set = HashSet::new();
   let mut seen     = HashSet::new();
+  let mut head_top = HashSet::new();
 
   // Reads the main term from the net
-  let mut main = reader(net, enter(net, host), &mut binder_name, &mut dups_vec, &mut dups_set, &mut seen);
+  let mut main = reader(net, enter(net, host), &mut binder_name, &mut dups_vec, &mut dups_set, &mut seen, &mut head_top, highlight);
 
   // Reads let founds by starting the reader function from their 0 ports.
   while dups_vec.len() > 0 {
     let dup = dups_vec.pop().unwrap();
-    let val = reader(net, enter(net,port(dup,0)), &mut binder_name, &mut dups_vec, &mut dups_set, &mut seen);
-    let tag = kind(net, dup) - DUP;
+    let val = reader(net, enter(net,port(dup,0)), &mut binder_name, &mut dups_vec, &mut dups_set, &mut seen, &mut head_top, highlight);
+    let tag = kind(net, dup);
     let fst = name_of(net, port(dup,1), &mut binder_name);
     let snd = name_of(net, port(dup,2), &mut binder_name);
     let val = Box::new(val);
     let nxt = Box::new(main);
     main = Dup{tag, fst, snd, val, nxt};
   }
+
   main
 }
 
@@ -679,15 +472,10 @@ pub fn namespace(space : &Vec<u8>, idx : u32, var : &Vec<u8>) -> Vec<u8> {
 // Makes a namespaced copy of a term
 pub fn copy(space : &Vec<u8>, idx : u32, term : &Term) -> Term {
   match term {
-    Lam{nam, bod} => {
-      let nam = namespace(space, idx, nam);
-      let bod = Box::new(copy(space, idx, bod));
-      Lam{nam, bod}
-    },
-    Tla{nam, bod} => {
-      let nam = namespace(space, idx, nam);
-      let bod = Box::new(copy(space, idx, bod));
-      Tla{nam, bod}
+    Tla{inp, out} => {
+      let inp = Box::new(copy(space, idx, inp));
+      let out = Box::new(copy(space, idx, out));
+      Tla{inp, out}
     },
     App{fun, arg} => {
       let fun = Box::new(copy(space, idx, fun));
@@ -708,44 +496,19 @@ pub fn copy(space : &Vec<u8>, idx : u32, term : &Term) -> Term {
       let nxt = Box::new(copy(space, idx, nxt));
       Dup{tag, fst, snd, val, nxt}
     },
-    Orb{val} => {
+    Hig{val, col} => {
       let val = Box::new(copy(space, idx, val));
-      Orb { val }
-    },
-    Orc{val} => {
-      let val = Box::new(copy(space, idx, val));
-      Orc { val }
-    },
-    Fix{nam, bod} => {
-      let nam = namespace(space, idx, nam);
-      let bod = Box::new(copy(space, idx, bod));
-      Fix{nam, bod}
+      Hig { val, col: *col }
     },
     Ann{val, typ} => {
       let val = Box::new(copy(space, idx, val));
       let typ = Box::new(copy(space, idx, typ));
       Ann{val, typ}
     },
-    Lan{val, typ} => {
-      let val = Box::new(copy(space, idx, val));
-      let typ = Box::new(copy(space, idx, typ));
-      Lan{val, typ}
-    },
     Arr{inp, out} => {
       let inp = Box::new(copy(space, idx, inp));
       let out = Box::new(copy(space, idx, out));
       Arr{inp, out}
-    },
-    Pol{nam, out} => {
-      let nam = namespace(space, idx, nam);
-      let out = Box::new(copy(space, idx, out));
-      Pol{nam, out}
-    },
-    All{nam, inp, out} => {
-      let nam = namespace(space, idx, nam);
-      let inp = Box::new(copy(space, idx, inp));
-      let out = Box::new(copy(space, idx, out));
-      All{nam, inp, out}
     },
     Var{nam} => {
       let nam = namespace(space, idx, nam);
@@ -767,7 +530,7 @@ fn parse_name(code: &Str) -> (&Str, &Str) {
 
 fn skip_whitespace(code: &Str) -> &Str {
   let mut i: usize = 0;
-  while i < code.len() && (code[i] == b' ' || code[i] == b'\n') {
+  while i < code.len() && (code[i] == b' ' || code[i] == b'\n' || code[i] == b'\t') {
     i += 1;
   }
   &code[i..]
@@ -804,33 +567,15 @@ pub fn parse_term<'a>(code: &'a Str, ctx: &mut Context<'a>, idx: &mut u32) -> (&
     }
     // Untyped Abstraction: `λvar body`
     b'\xce' if code[1] == b'\xbb' => {
-      let (code, nam) = parse_name(&code[2..]);
-      extend(nam, None, ctx);
-      let (code, bod) = parse_term(code, ctx, idx);
-      narrow(ctx);
-      let nam = nam.to_vec();
-      let bod = Box::new(bod);
-      (code, Lam { nam, bod })
-    }
-    // Ann-lambda: `Θvar body`
-    b'\xce' if code[1] == b'\x98' => {
-      let (code, nam) = parse_name(&code[2..]);
-      extend(nam, None, ctx);
-      let (code, bod) = parse_term(code, ctx, idx);
-      narrow(ctx);
-      let nam = nam.to_vec();
-      let bod = Box::new(bod);
-      (code, Tla { nam, bod })
+      let (code, inp) = parse_term(&code[2..], ctx, idx);
+      let (code, out) = parse_term(code, ctx, idx);
+      (code, Arr { inp: Box::new(inp), out: Box::new(out) })
     }
     // Untyped Abstraction: `λvar body`
-    b'\xce' if code[1] == b'\xbb' => {
-      let (code, nam) = parse_name(&code[2..]);
-      extend(nam, None, ctx);
-      let (code, bod) = parse_term(code, ctx, idx);
-      narrow(ctx);
-      let nam = nam.to_vec();
-      let bod = Box::new(bod);
-      (code, Lam { nam, bod })
+    b'\x5c' => {
+      let (code, inp) = parse_term(&code[1..], ctx, idx);
+      let (code, out) = parse_term(code, ctx, idx);
+      (code, Arr { inp: Box::new(inp), out: Box::new(out) })
     }
     // Application: `(func argm1 argm2 ... argmN)`
     b'(' => {
@@ -844,32 +589,36 @@ pub fn parse_term<'a>(code: &'a Str, ctx: &mut Context<'a>, idx: &mut u32) -> (&
       let code = parse_text(code, b")").unwrap();
       (code, fun)
     }
+    // Ann-lambda: `θvar body`
+    b'\xce' if (code[1] == b'\x98' || code[1] == b'\xb8') => {
+      let (code, inp) = parse_term(&code[2..], ctx, idx);
+      let (code, out) = parse_term(code, ctx, idx);
+      (code, Tla { inp: Box::new(inp), out: Box::new(out) })
+    }
     // Annotation: `<val:typ>`
     b'<' => {
       let (code, val) = parse_term(&code[1..], ctx, idx);
+      let code = skip_whitespace(code);
       let code = parse_text(code, b":").unwrap();
       let (code, typ) = parse_term(code, ctx, idx);
       let code = parse_text(code, b">").unwrap();
       (code, Ann { val: Box::new(val), typ: Box::new(typ) })
     },
-    // Light-annotation: `[typ val]`
-    b'[' => {
-      let (code, val) = parse_term(&code[1..], ctx, idx);
-      let (code, typ) = parse_term(code, ctx, idx);
-      let code = parse_text(code, b"]").unwrap();
-      (code, Lan { val: Box::new(val), typ: Box::new(typ) })
-    },
-    // Pair: `{val0 val1}#tag` (note: '#tag' is optional)
+    // Pair: `#tag{val0 val1}` (note: '#tag' is optional)
     b'{' => {
-      let (code, fst) = parse_term(&code[1..], ctx, idx);
-      let (code, snd) = parse_term(code, ctx, idx);
-      let  code       = parse_text(code, b"}").unwrap();
       let (code, tag) = if code[0] == b'#' { parse_name(&code[1..]) } else { (code, &b""[..]) };
       let tag = name_to_index(&tag.to_vec());
-      let fst = Box::new(fst);
-      let snd = Box::new(snd);
-      (code, Sup { tag, fst, snd })
+      let (mut code, mut fst) = parse_term(&code[1..], ctx, idx);
+      while code[0] != b'}' {
+        let (new_code, snd) = parse_term(code, ctx, idx);
+        code = skip_whitespace(new_code);
+        let snd = Box::new(snd);
+        fst = Sup { fst: Box::new(fst), snd, tag };
+      }
+      let code = parse_text(code, b"}").unwrap();
+      (code, fst)
     }
+
     // Dup: `dup #tag fst snd = val; bod` (note: '#tag' and ';' are optional)
     b'd' if code.starts_with(b"dup ") => {
       let  code       = &code[4..];
@@ -884,56 +633,13 @@ pub fn parse_term<'a>(code: &'a Str, ctx: &mut Context<'a>, idx: &mut u32) -> (&
       let (code, nxt) = parse_term(code, ctx, idx);
       narrow(ctx);
       narrow(ctx);
-      let tag = name_to_index(&tag.to_vec());
+      let tag = name_to_index(&tag.to_vec()) + DUP;
       let fst = fst.to_vec();
       let snd = snd.to_vec();
       let val = Box::new(val);
       let nxt = Box::new(nxt);
       (code, Dup { tag, fst, snd, val, nxt })
     }
-    // Fix: `%name body`
-    b'%' => {
-      let (code, nam) = parse_name(&code[1..]);
-      let (code, bod) = parse_term(code, ctx, idx);
-      let nam = nam.to_vec();
-      let bod = Box::new(bod);
-      (code, Fix { nam, bod })
-    }
-    // Arrow: `&term0 -> term1`
-    b'&' => {
-      let (code, inp) = parse_term(&code[1..], ctx, idx);
-      let code = parse_text(code, b"->").unwrap();
-      let (code, out) = parse_term(code, ctx, idx);
-      (code, Arr { inp: Box::new(inp), out: Box::new(out) })
-    },
-    // Forall: `∀(nam:inp) -> out`
-    b'\xe2' if code[1] == b'\x88' && code[2] == b'\x80' && code[3] == b'(' => {
-      let (code, nam) = parse_name(&code[4..]);
-      let code = parse_text(code, b":").unwrap();
-      extend(nam, None, ctx);
-      let (code, inp) = parse_term(code, ctx, idx);
-      let code = parse_text(code, b")").unwrap();
-      let code = parse_text(code, b"->").unwrap();
-      let (code, out) = parse_term(code, ctx, idx);
-      narrow(ctx);
-      let nam = nam.to_vec();
-      (code, All { nam, inp: Box::new(inp), out: Box::new(out) })
-    },
-    // Polymorphism: `∀nam out`
-    b'\xe2' if code[1] == b'\x88' && code[2] == b'\x80' => {
-      let (code, nam) = parse_name(&code[3..]);
-      let code = parse_text(code, b"->").unwrap();
-      extend(nam, None, ctx);
-      let (code, out) = parse_term(code, ctx, idx);
-      narrow(ctx);
-      let nam = nam.to_vec();
-      (code, Pol { nam, out: Box::new(out) })
-    },
-    // Orc, the Orb killer: †x
-    b'\xe2' if code[1] == b'\x80' && code[2] == b'\xa0' => {
-      let (code, val) = parse_term(&code[3..], ctx, idx);
-      (code, Orc { val: Box::new(val) })
-    },
     // Any: `@`
     b'@' => {
       (&code[1..], Any)
@@ -976,106 +682,113 @@ pub fn from_string<'a>(code : &'a Str) -> Term {
 
 // Converts a λ-term back to a source-code.
 pub fn to_string(term : &Term) -> Vec<Chr> {
-  fn stringify_term(code : &mut Vec<u8>, term : &Term) {
+  fn stringify_term(code : &mut Vec<u8>, term : &Term, highlight: u32) {
+    fn start_highlight(code : &mut Vec<u8>,highlight: u32) {
+      if highlight == 1 {
+        code.extend_from_slice(b"\x1b[1;32m");
+      }
+      if highlight == 2 {
+        code.extend_from_slice(b"\x1b[1;31m");
+      }
+    }
+    fn end_highlight(code : &mut Vec<u8>, highlight: u32) {
+      if highlight != 0 {
+        code.extend_from_slice(b"\x1b[0m");
+      }
+    }
     match term {
-      &Lam{ref nam, ref bod} => {
-        code.extend_from_slice("λ".as_bytes());
-        code.append(&mut nam.clone());
+      &Tla{ref inp, ref out} => {
+        start_highlight(code, highlight);
+        code.extend_from_slice("θ".as_bytes());
+        end_highlight(code, highlight);
+        stringify_term(code, &inp, 0);
         code.extend_from_slice(b" ");
-        stringify_term(code, &bod);
-      },
-      &Tla{ref nam, ref bod} => {
-        code.extend_from_slice("Θ".as_bytes());
-        code.append(&mut nam.clone());
-        code.extend_from_slice(b" ");
-        stringify_term(code, &bod);
+        stringify_term(code, &out, 0);
       },
       &App{ref fun, ref arg} => {
+        start_highlight(code, highlight);
         code.extend_from_slice(b"(");
-        stringify_term(code, &fun);
-        code.extend_from_slice(b" ");
-        stringify_term(code, &arg);
+        end_highlight(code, highlight);
+        stringify_term(code, &fun, 0);
+        start_highlight(code, highlight);
+        code.extend_from_slice(b" <- ");
+        end_highlight(code, highlight);
+        stringify_term(code, &arg, 0);
+        start_highlight(code, highlight);
         code.extend_from_slice(b")");
-      },
-      &Lan{ref val, ref typ} => {
-        code.extend_from_slice(b"[");
-        stringify_term(code, &typ);
-        code.extend_from_slice(b" ");
-        stringify_term(code, &val);
-        code.extend_from_slice(b"]");
-      },
-      &Ann{ref val, ref typ} => {
-        code.extend_from_slice(b"<");
-        stringify_term(code, &val);
-        code.extend_from_slice(b": ");
-        stringify_term(code, &typ);
-        code.extend_from_slice(b">");
-      },
-      &Sup{tag, ref fst, ref snd} => {
-        code.extend_from_slice(b"[");
-        stringify_term(code, &fst);
-        code.extend_from_slice(b" ");
-        stringify_term(code, &snd);
-        if tag != 0 {
-          code.extend_from_slice(b"#");
-          code.append(&mut index_to_name(tag));
-        }
-        code.extend_from_slice(b"]");
+        end_highlight(code, highlight);
       },
       &Dup{tag, ref fst, ref snd, ref val, ref nxt} => {
+        start_highlight(code, highlight);
         code.extend_from_slice(b"dup ");
-        if tag != 0 {
+        end_highlight(code, highlight);
+        if tag != 8 {
+          start_highlight(code, highlight);
           code.extend_from_slice(b"#");
           code.append(&mut index_to_name(tag));
           code.extend_from_slice(b" ");
+          end_highlight(code, highlight);
         }
         code.append(&mut fst.clone());
         code.extend_from_slice(b" ");
         code.append(&mut snd.clone());
+        start_highlight(code, highlight);
         code.extend_from_slice(b" = ");
-        stringify_term(code, &val);
+        end_highlight(code, highlight);
+        stringify_term(code, &val, highlight);
+        start_highlight(code, highlight);
         code.extend_from_slice(b"; ");
-        stringify_term(code, &nxt);
+        end_highlight(code, highlight);
+        stringify_term(code, &nxt, highlight);
       },
-      &Fix{ref nam, ref bod} => {
-        code.extend_from_slice(b"%");
-        code.append(&mut nam.clone());
+      &Ann{ref val, ref typ} => {
+        start_highlight(code, highlight);
+        code.extend_from_slice(b"<");
+        end_highlight(code, highlight);
+        stringify_term(code, &val, 0);
+        code.extend_from_slice(b": ");
+        stringify_term(code, &typ, 0);
+        start_highlight(code, highlight);
+        code.extend_from_slice(b">");
+        end_highlight(code, highlight);
+      },
+      &Sup{tag, ref fst, ref snd} => {
+        if tag != 0 {
+          start_highlight(code, highlight);
+          code.extend_from_slice(b"#");
+          code.append(&mut index_to_name(tag));
+          end_highlight(code, highlight);
+        };
+        start_highlight(code, highlight);
+        code.extend_from_slice(b"{");
+        end_highlight(code, highlight);
+        stringify_term(code, &fst, 0);
         code.extend_from_slice(b" ");
-        stringify_term(code, &bod);
+        stringify_term(code, &snd, 0);
+        start_highlight(code, highlight);
+        code.extend_from_slice(b"}");
+        end_highlight(code, highlight);
       },
       &Arr{ref inp, ref out} => {
-        code.extend_from_slice(b"&");
-        stringify_term(code, &inp);
-        code.extend_from_slice(b" ");
-        stringify_term(code, &out);
+        start_highlight(code, highlight);
+        code.extend_from_slice(b"\xCE\xBB");
+        end_highlight(code, highlight);
+        stringify_term(code, &inp, 0);
+        start_highlight(code, highlight);
+        code.extend_from_slice(b" -> ");
+        end_highlight(code, highlight);
+        stringify_term(code, &out, 0);
       },
-      &All{ref nam, ref inp, ref out} => {
-        code.extend_from_slice(b"\xE2\x88\x80(");
-        code.append(&mut nam.clone());
-        code.extend_from_slice(b": ");
-        stringify_term(code, &inp);
-        code.extend_from_slice(b") -> ");
-        stringify_term(code, &out);
-      },
-      &Pol{ref nam, ref out} => {
-        code.extend_from_slice(b"\xE2\x88\x80");
-        code.append(&mut nam.clone());
-        code.extend_from_slice(b" ");
-        stringify_term(code, &out);
-      },
-      &Orb{ref val} => {
-        code.extend_from_slice(b"\xc2\xb7");
-        stringify_term(code, &val)
-      },
-      &Orc{ref val} => {
-        code.extend_from_slice(b"\xe2\x80\xa0");
-        stringify_term(code, &val)
+      &Hig{ref val, col} => {
+        stringify_term(code, &val, col)
       }
       &Any => {
         code.extend_from_slice(b"@");
       },
       &Era => {
+        start_highlight(code, highlight);
         code.extend_from_slice(b"*");
+        end_highlight(code, highlight);
       },
       &Var{ref nam} => {
         code.append(&mut nam.clone());
@@ -1083,7 +796,7 @@ pub fn to_string(term : &Term) -> Vec<Chr> {
     }
   }
   let mut code = Vec::new();
-  stringify_term(&mut code, &term);
+  stringify_term(&mut code, &term, 0);
   return code;
 }
 
@@ -1108,17 +821,6 @@ pub fn lambda_term_to_inet(term : &Term) -> INet {
         let arg = encode(inet, label, scope, arg);
         link(inet, port(app, 1), arg);
         port(app, 2)
-      },
-      &Lam{ref nam, ref bod} => {
-        let fun = new_node(inet, CON);
-        let era = new_node(inet, ERA);
-        link(inet, port(fun, 1), port(era, 0));
-        link(inet, port(era, 1), port(era, 2));
-        scope.push((nam.to_vec(), fun));
-        let bod = encode(inet, label, scope, bod);
-        scope.pop();
-        link(inet, port(fun, 2), bod);
-        port(fun, 0)
       },
       &Ann{..} => {
         todo!();
@@ -1168,7 +870,7 @@ pub fn lambda_term_from_inet(inet: &INet, init: Port) -> Term {
           node_depth[prev_node as usize] = depth;
           let nam = index_to_name(depth + 1);
           let bod = Box::new(go(inet, node_depth, port(prev_node, 2), exit, depth + 1));
-          Lam {nam, bod}
+          todo!();
         },
         1 => {
           let nam = index_to_name(node_depth[prev_node as usize] + 1);

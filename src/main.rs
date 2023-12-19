@@ -39,7 +39,9 @@ fn main() {
   file.read_to_string(&mut code).expect("Unable to read the file");
 
   // Converts source to term
+  println!("{:?}", "Parsing");
   let term = from_string(code.as_bytes());
+  println!("{:?}", "Parsed.");
 
   // Converts term to inet
   let mut inet = new_inet();
