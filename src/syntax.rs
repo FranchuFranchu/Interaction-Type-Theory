@@ -8,16 +8,12 @@ use std;
 use self::rand::Rng;
 
 // Translations from CoC to ITT.
-// <Term> ::= <Lam> | <App> | <Sup> | <Dup> | <Fix> | <Ann> | <Arr> | <Pol> | <Var> | <Any> | <Era>
-// <Lam>  ::= "λ" <Name> <Term>
-// <App>  ::= "(" <Term> <Term> ")"
-// <Ann>  ::= "<" <Term> ":" <Term> ")"
-// <Sup>  ::= "{" <Term> <Term> "}" ["#" <Tag>]
-// <Dup>  ::= "dup" ["#" <Tag>] <Name> <Name> "=" <Term> [";"] <Term>
-// <Arr>  ::= <Term> "->" <Term>
-// <All>  ::= "∀(" <Name> ":" <Term> ")" "->" <Term>
-// <Pol>  ::= "∀" <Name> <Term>
-// <Fix>  ::= "%" <Name> <Term>
+// <Term> ::= <Lam> | <App> | <Sup> | <Dup> | <Fix> | <Ann> | <Lam> | <Pol> | <Var> | <Any> | <Era>
+// <Lam>  ::= ["#" <Tag>] "λ" <Name> <Term>
+// <App>  ::= ["#" <Tag>] "(" <Term> <Term> ")"
+// <Ann>  ::= "<" <Term> ":" <Term> ">"
+// <Sup>  ::= ["#" <Tag>] "{" <Term> <Term> "}"
+// <Dup>  ::= ["#" <Tag>] "dup" <Name> <Name> "=" <Term> [";"] <Term>
 // <Var>  ::= <Name>
 // <Any>  ::= "@"
 // <Era>  ::= "*"
@@ -26,6 +22,9 @@ use self::rand::Rng;
 
 #[derive(Clone, Debug)]
 pub enum Term {
+  // Lambdas
+  Lam {inp: Box<Term>, out: Box<Term>},
+
   // Applications
   App {fun: Box<Term>, arg: Box<Term>},
 
@@ -35,18 +34,21 @@ pub enum Term {
   // Duplications
   Dup {tag: u32, fst: Vec<u8>, snd: Vec<u8>, val: Box<Term>, nxt: Box<Term>},
 
-  // Annotations
-  Ann {val: Box<Term>, typ: Box<Term>},
-
-  // Arrow (simple function)
-  Arr {inp: Box<Term>, out: Box<Term>},
-  
-  // Variables
-  Var {nam: Vec<u8>}, 
-  
   // Type-lambda
   Tla {inp: Box<Term>, out: Box<Term> },
 
+  // Annotations
+  Ann {val: Box<Term>, typ: Box<Term>},
+  
+  // Equals
+  Eql {fst: Box<Term>, snd: Box<Term>},
+
+  // Observations
+  Obs {fst: Vec<u8>, snd: Vec<u8>, val: Box<Term>, nxt: Box<Term>},
+
+  // Variables
+  Var {nam: Vec<u8>}, 
+  
   // Any
   Any,
 
@@ -58,6 +60,33 @@ pub enum Term {
 }
 
 use self::Term::{*};
+
+impl Term {
+  fn children(&self) -> impl Iterator<Item = &Term> {
+    Vec::into_iter(match self {
+        Lam { inp, out }
+        | Tla { inp, out } => vec![inp.as_ref(), out.as_ref()],
+        App { fun, arg } 
+        | Ann { val: fun, typ: arg } => vec![fun.as_ref(), arg.as_ref()],
+        Eql { fst, snd } 
+        | Sup { fst, snd, .. } => vec![fst.as_ref(), snd.as_ref()],
+        Dup { val, nxt, .. } 
+        | Obs { val, nxt, .. } => vec![val.as_ref(), nxt.as_ref()],
+        Hig { val, col } => vec![val],
+        _ => vec![],
+    })
+  }
+  pub fn has_eql_node(&self) -> bool {
+    match self {
+      Obs { .. } | Eql { .. } => true,
+      _ => {
+        self.children().any(|x| x.has_eql_node())
+      }
+    }
+    
+  }
+
+}
 
 // Conversion
 // ==========
@@ -72,11 +101,11 @@ pub fn inject(inet: &mut INet, term: &Term, host: Port) {
     vars  : &mut Vec<(Vec<u8>,u32)>
   ) -> Port {
     match term {
-      // Arrow becomes a CON node. Ports:
+      // Lamow becomes a CON node. Ports:
       // - 0: points to where the arrow occurs.
       // - 1: points to the input type of the arrow.
       // - 2: points to the output type of the arrow.
-      &Arr { ref inp, ref out } => {
+      &Lam { ref inp, ref out } => {
         let arr = new_node(net, CON);
         let inp = encode_term(net, inp, port(arr, 1), scope, vars);
         link(net, port(arr, 1), inp);
@@ -114,25 +143,35 @@ pub fn inject(inet: &mut INet, term: &Term, host: Port) {
       // - 2: points to the value being annotated.
       &Ann{ref val, ref typ} => {
         let ann = new_node(net, ANN);
-        let val = encode_term(net, val, port(ann, 2), scope, vars);
-        link(net, val, port(ann, 1));
         let typ = encode_term(net, typ, port(ann, 0), scope, vars);
         link(net, port(ann, 0), typ);
+        let val = encode_term(net, val, port(ann, 1), scope, vars);
+        link(net, port(ann, 1), val);
         port(ann, 2)
       },
       // A pair becomes a dup node. Ports:
       // - 0: points to where the pair occurs.
       // - 1: points to the first value.
       // - 2: points to the second value.
-      &Sup{tag, ref fst, ref snd} => {
-        let dup = new_node(net, DUP + tag);
+      term @ Sup{ fst, snd, .. } | term @ Eql { fst, snd, .. } => {
+        let tag = if let Sup { tag, .. } = term {
+          DUP + tag
+        } else {
+          EQL
+        };
+        let dup = new_node(net, tag);
         let fst = encode_term(net, fst, port(dup, 1), scope, vars);
         link(net, port(dup, 1), fst);
         let snd = encode_term(net, snd, port(dup, 2), scope, vars);
         link(net, port(dup, 2), snd);
         port(dup, 0)
       },
-      &Dup{tag, ref fst, ref snd, ref val, ref nxt} => {
+      term @ Dup { fst, snd, val, nxt, .. } | term @ Obs { fst, snd, val, nxt  }  => {
+        let tag = if let Dup { tag, .. } = term {
+          DUP + tag
+        } else {
+          EQL
+        };
         let dup = new_node(net, tag);
         scope.insert(fst.to_vec(), port(dup, 1));
         scope.insert(snd.to_vec(), port(dup, 2));
@@ -177,9 +216,14 @@ pub fn inject(inet: &mut INet, term: &Term, host: Port) {
   // Encodes the main term.
   let main = encode_term(inet, &term, host, &mut scope, &mut vars);
   
+  for (k, v) in scope {
+    vars.push((k, v))
+  }
+  println!("{:?}", vars);
   // Links bound variables.
   for i in 0..vars.len() {
     let (ref name1, var1) = vars[i];
+    let name_str = std::str::from_utf8(name1).unwrap();
     if enter(inet, var1) != var1 {
       // This means we've already connected this variable
       continue;
@@ -191,7 +235,7 @@ pub fn inject(inet: &mut INet, term: &Term, host: Port) {
       let (ref name2, var2) = vars[j];  
       if name1 == name2 {
         if found {
-          panic!("Variable {:?} bound/used more than twice!", name1);
+          panic!("Variable {:?} bound/used more than twice!", );
         }
         found = true;
         link(inet, var1, var2);
@@ -199,6 +243,7 @@ pub fn inject(inet: &mut INet, term: &Term, host: Port) {
     }
     // Connects unbound variables to erasure nodes
     if (!found) {
+      eprintln!("warning: var {:?} erased", name_str);
       let era = new_node(inet, ERA);
       link(inet, port(era, 1), port(era, 2));
       link(inet, var1, port(era, 0));
@@ -254,10 +299,13 @@ pub fn readback_and_highlight(net: &INet, host: Port, highlight: &HashMap<u32, u
     */
     seen.insert(next);
 
-    let term = match kind(net, addr(next)) {
+    let mut highlight_from = vec![];
+
+
+    let mut term = match kind(net, addr(next)) {
       // If we're visiting a eraser...
-      ERA => Era,
       // If we're visiting a con node...
+      ERA => Era,
       CON => match slot(next) {
         // If we're visiting a port 0, then it is a lambda / arrow.
         0 => {
@@ -265,12 +313,14 @@ pub fn readback_and_highlight(net: &INet, host: Port, highlight: &HashMap<u32, u
             // It is a variable
             Var{nam: name_of(net, enter(net, next), var_name)}
           } else {
+            highlight_from.extend_from_slice(&[0, 1, 2]);
             head_top.insert(addr(next));
+            let nam = name_of(net, port(addr(next), 1), var_name);
             let prt = enter(net, port(addr(next), 2));
-            let out = reader(net, prt, var_name, dups_vec, dups_set, seen, head_top, highlight);
-            let prt = enter(net, port(addr(next), 1));
-            let inp = reader(net, prt, var_name, dups_vec, dups_set, seen, head_top, highlight);
-            Arr { inp: Box::new(inp), out: Box::new(out) }
+            let bod = reader(net, prt, var_name, dups_vec, dups_set, seen, head_top, highlight);
+            let ann = enter(net, port(addr(next), 1));
+            let lam = Lam { inp: Box::new(Var { nam: nam }), out: Box::new(bod) };
+            lam
           }
         },
         // If we're visiting a port 1, then it is a variable.
@@ -284,6 +334,7 @@ pub fn readback_and_highlight(net: &INet, host: Port, highlight: &HashMap<u32, u
             // It is a variable
             Var{nam: name_of(net, enter(net, next), var_name)}
           } else {
+            highlight_from.extend_from_slice(&[0, 1, 2]);
             head_top.insert(addr(next));
             let prt = enter(net, port(addr(next), 0));
             let fun = reader(net, prt, var_name, dups_vec, dups_set, seen, head_top, highlight);
@@ -297,6 +348,7 @@ pub fn readback_and_highlight(net: &INet, host: Port, highlight: &HashMap<u32, u
       ANN => match slot(next) {
         0 => {
           if head_top.contains(&addr(next)) {
+            highlight_from.extend_from_slice(&[0, 1, 2]);
             // It is a variable
             Var{nam: name_of(net, enter(net, next), var_name)}
           } else {
@@ -316,6 +368,7 @@ pub fn readback_and_highlight(net: &INet, host: Port, highlight: &HashMap<u32, u
             // It is a variable
             Var{nam: name_of(net, enter(net, next), var_name)}
           } else {
+            highlight_from.extend_from_slice(&[0, 1, 2]);
             head_top.insert(addr(next));
             let prt = enter(net, port(addr(next), 0));
             let typ = reader(net, prt, var_name, dups_vec, dups_set, seen, head_top, highlight);
@@ -337,7 +390,14 @@ pub fn readback_and_highlight(net: &INet, host: Port, highlight: &HashMap<u32, u
           let fst = reader(net, prt, var_name, dups_vec, dups_set, seen, head_top, highlight);
           let prt = enter(net, port(addr(next), 2));
           let snd = reader(net, prt, var_name, dups_vec, dups_set, seen, head_top, highlight);
-          Sup{tag, fst: Box::new(fst), snd: Box::new(snd)}
+          if tag >= DUP {
+            highlight_from.extend_from_slice(&[0, 1, 2]);
+            Sup{tag: tag - DUP, fst: Box::new(fst), snd: Box::new(snd)}
+          } else {
+            highlight_from.extend_from_slice(&[0, 1, 2]);
+            Eql{fst: Box::new(fst), snd: Box::new(snd)}
+          }
+          
         },
         // If we're visiting a port 1 or 2, then it is a variable.
         // Also, that means we found a dup, so we store it to read later.
@@ -349,11 +409,12 @@ pub fn readback_and_highlight(net: &INet, host: Port, highlight: &HashMap<u32, u
         }
       }
     };
-    if let Some(color) = highlight.get(&next) {
-      Hig { val: Box::new(term), col: *color }
-    } else {
-      term
-    }
+    for slot in highlight_from {
+      if let Some(color) = highlight.get(&port(addr(next), slot)) {
+        term = Hig { val: Box::new(term), col: *color };
+      }
+    };
+    term
   }
 
   // A hashmap linking ports to binder names. Those ports have names:
@@ -380,7 +441,17 @@ pub fn readback_and_highlight(net: &INet, host: Port, highlight: &HashMap<u32, u
     let snd = name_of(net, port(dup,2), &mut binder_name);
     let val = Box::new(val);
     let nxt = Box::new(main);
-    main = Dup{tag, fst, snd, val, nxt};
+    main = if tag >= DUP {
+      Dup{tag, fst, snd, val, nxt}
+    } else {
+      Obs{fst, snd, val, nxt}
+    };
+    if let Some(color) = highlight.get(&port(dup, 0)) {
+      main = Hig { val: Box::new(main), col: *color };
+    }
+    if let Some(color) = highlight.get(&port(dup, 1)) {
+      main = Hig { val: Box::new(main), col: *color };
+    }
   }
 
   main
@@ -496,6 +567,18 @@ pub fn copy(space : &Vec<u8>, idx : u32, term : &Term) -> Term {
       let nxt = Box::new(copy(space, idx, nxt));
       Dup{tag, fst, snd, val, nxt}
     },
+    Eql{fst, snd} => {
+      let fst = Box::new(copy(space, idx, fst));
+      let snd = Box::new(copy(space, idx, snd));
+      Eql{fst, snd}
+    },
+    Obs{fst, snd, val, nxt} => {
+      let fst = namespace(space, idx, fst);
+      let snd = namespace(space, idx, snd);
+      let val = Box::new(copy(space, idx, val));
+      let nxt = Box::new(copy(space, idx, nxt));
+      Obs{fst, snd, val, nxt}
+    },
     Hig{val, col} => {
       let val = Box::new(copy(space, idx, val));
       Hig { val, col: *col }
@@ -505,10 +588,10 @@ pub fn copy(space : &Vec<u8>, idx : u32, term : &Term) -> Term {
       let typ = Box::new(copy(space, idx, typ));
       Ann{val, typ}
     },
-    Arr{inp, out} => {
+    Lam{inp, out} => {
       let inp = Box::new(copy(space, idx, inp));
       let out = Box::new(copy(space, idx, out));
-      Arr{inp, out}
+      Lam{inp, out}
     },
     Var{nam} => {
       let nam = namespace(space, idx, nam);
@@ -569,13 +652,13 @@ pub fn parse_term<'a>(code: &'a Str, ctx: &mut Context<'a>, idx: &mut u32) -> (&
     b'\xce' if code[1] == b'\xbb' => {
       let (code, inp) = parse_term(&code[2..], ctx, idx);
       let (code, out) = parse_term(code, ctx, idx);
-      (code, Arr { inp: Box::new(inp), out: Box::new(out) })
+      (code, Lam { inp: Box::new(inp), out: Box::new(out) })
     }
     // Untyped Abstraction: `λvar body`
     b'\x5c' => {
       let (code, inp) = parse_term(&code[1..], ctx, idx);
       let (code, out) = parse_term(code, ctx, idx);
-      (code, Arr { inp: Box::new(inp), out: Box::new(out) })
+      (code, Lam { inp: Box::new(inp), out: Box::new(out) })
     }
     // Application: `(func argm1 argm2 ... argmN)`
     b'(' => {
@@ -605,6 +688,19 @@ pub fn parse_term<'a>(code: &'a Str, ctx: &mut Context<'a>, idx: &mut u32) -> (&
       (code, Ann { val: Box::new(val), typ: Box::new(typ) })
     },
     // Pair: `#tag{val0 val1}` (note: '#tag' is optional)
+    b'?' => {
+      let (mut code, mut fst) = parse_term(&code[2..], ctx, idx);
+      while code[0] != b'}' {
+        let (new_code, snd) = parse_term(code, ctx, idx);
+        code = skip_whitespace(new_code);
+        let snd = Box::new(snd);
+        fst = Eql { fst: Box::new(fst), snd };
+      }
+      let code = parse_text(code, b"}").unwrap();
+      (code, fst)
+    }
+
+    // Pair: `#tag{val0 val1}` (note: '#tag' is optional)
     b'{' => {
       let (code, tag) = if code[0] == b'#' { parse_name(&code[1..]) } else { (code, &b""[..]) };
       let tag = name_to_index(&tag.to_vec());
@@ -633,7 +729,7 @@ pub fn parse_term<'a>(code: &'a Str, ctx: &mut Context<'a>, idx: &mut u32) -> (&
       let (code, nxt) = parse_term(code, ctx, idx);
       narrow(ctx);
       narrow(ctx);
-      let tag = name_to_index(&tag.to_vec()) + DUP;
+      let tag = name_to_index(&tag.to_vec());
       let fst = fst.to_vec();
       let snd = snd.to_vec();
       let val = Box::new(val);
@@ -735,11 +831,11 @@ pub fn to_string(term : &Term) -> Vec<Chr> {
         start_highlight(code, highlight);
         code.extend_from_slice(b" = ");
         end_highlight(code, highlight);
-        stringify_term(code, &val, highlight);
+        stringify_term(code, &val, 0);
         start_highlight(code, highlight);
         code.extend_from_slice(b"; ");
         end_highlight(code, highlight);
-        stringify_term(code, &nxt, highlight);
+        stringify_term(code, &nxt, 0);
       },
       &Ann{ref val, ref typ} => {
         start_highlight(code, highlight);
@@ -769,7 +865,7 @@ pub fn to_string(term : &Term) -> Vec<Chr> {
         code.extend_from_slice(b"}");
         end_highlight(code, highlight);
       },
-      &Arr{ref inp, ref out} => {
+      &Lam{ref inp, ref out} => {
         start_highlight(code, highlight);
         code.extend_from_slice(b"\xCE\xBB");
         end_highlight(code, highlight);
@@ -778,6 +874,33 @@ pub fn to_string(term : &Term) -> Vec<Chr> {
         code.extend_from_slice(b" -> ");
         end_highlight(code, highlight);
         stringify_term(code, &out, 0);
+      },
+      &Obs{ref fst, ref snd, ref val, ref nxt} => {
+        start_highlight(code, highlight);
+        code.extend_from_slice(b"obs ");
+        end_highlight(code, highlight);
+        code.append(&mut fst.clone());
+        code.extend_from_slice(b" ");
+        code.append(&mut snd.clone());
+        start_highlight(code, highlight);
+        code.extend_from_slice(b" = ");
+        end_highlight(code, highlight);
+        stringify_term(code, &val, 0);
+        start_highlight(code, highlight);
+        code.extend_from_slice(b"; ");
+        end_highlight(code, highlight);
+        stringify_term(code, &nxt, 0);
+      },
+      &Eql{ref fst, ref snd} => {
+        start_highlight(code, highlight);
+        code.extend_from_slice(b"?{");
+        end_highlight(code, highlight);
+        stringify_term(code, &fst, 0);
+        code.extend_from_slice(b" ");
+        stringify_term(code, &snd, 0);
+        start_highlight(code, highlight);
+        code.extend_from_slice(b"}");
+        end_highlight(code, highlight);
       },
       &Hig{ref val, col} => {
         stringify_term(code, &val, col)

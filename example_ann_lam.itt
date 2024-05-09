@@ -1,5 +1,0 @@
-def S = λx λy λ{z0 z1} (x z0 (y z1));
-def K = λx λy x;
-def BoolF = λb (b λt0 λf0 t0 λt1 λf1 f1)
-def Bool = θb (BoolF b)
-<λt λf λx x: Bool>

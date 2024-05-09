@@ -56,5 +56,8 @@ fn main() {
 
   let term = crate::syntax::readback(&inet, 1);
   println!("{}\n", term);
+  if term.has_eql_node() {
+    println!("{}", "Equality failed. Terms are not equal.");
+  }
 
 }

@@ -1,0 +1,14 @@
+def True = λt λf t;
+def False = λt λf f;
+def Two = λfλx dup f0 f1 = f; (f0 (f1 x))
+def Four = 
+	dup f0 fa = f; 
+	dup f1 fb = fa;
+	dup f2 f3 = fb; 
+	λfλx(f0 (f1 (f2 (f3 x))));
+def Pair = λaλbλp(p a b)
+def SelfPair = λx dup #x x0 x1 = x; (Pair x0 x1)
+def ConEta = λxλy(x y)
+def DupEta = λx dup a b = x; {a b}
+
+?{(SelfPair (DupEta Two)) (ConEta (Pair Two Two))}
